@@ -45,21 +45,48 @@ def get_stock_data(yf_ticker):
         return {"price": 0}
 
 def get_news_data(company_name):
-    """캐시 없이 매번 새로 조회"""
+    """캐시 없이 매번 새로 조회 - 뉴스 제목과 링크 반환"""
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         return []
     try:
         url = "https://openapi.naver.com/v1/search/news.json"
         headers = {
             "X-Naver-Client-Id": NAVER_CLIENT_ID, 
-            "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
+            "X-Naver-Client-SECRET": NAVER_CLIENT_SECRET
         }
-        params = {"query": company_name, "display": 5, "sort": "date"}
+        # 종목명을 정확히 포함하도록 검색어 수정
+        search_query = f"{company_name} 주가"
+        params = {"query": search_query, "display": 10, "sort": "date"}
         response = requests.get(url, headers=headers, params=params, timeout=10)
         
         if response.status_code == 200:
             items = response.json().get('items', [])
-            return [item['title'].replace("<b>","").replace("</b>","") for item in items]
+            news_list = []
+            
+            for item in items:
+                title = item['title'].replace("<b>","").replace("</b>","")
+                link = item['link']
+                # 종목명이 제목에 포함된 뉴스만 필터링
+                if company_name in title:
+                    news_list.append({
+                        'title': title,
+                        'link': link
+                    })
+                    if len(news_list) >= 5:  # 최대 5개
+                        break
+            
+            # 종목명 필터링 후에도 부족하면 전체에서 5개 선택
+            if len(news_list) < 5:
+                news_list = []
+                for item in items[:5]:
+                    title = item['title'].replace("<b>","").replace("</b>","")
+                    link = item['link']
+                    news_list.append({
+                        'title': title,
+                        'link': link
+                    })
+            
+            return news_list
         else:
             return []
     except Exception as e:
@@ -74,8 +101,11 @@ def analyze_validity(ticker, news_list, company_name):
     if not news_list:
         return {"correlation_score": 50, "reason": "최신 뉴스가 없어 중립적으로 평가합니다."}
 
+    # 뉴스 제목만 추출
+    news_titles = [news['title'] for news in news_list]
+    
     prompt = f"""종목명: {company_name} (코드: {ticker})
-최신 뉴스: {news_list}
+최신 뉴스: {news_titles}
 
 이 뉴스들이 {company_name} 주가에 미치는 영향을 0~100점으로 평가해주세요.
 호재(긍정적): 70~100점
@@ -239,7 +269,9 @@ user_input = st.text_input(
     help="종목명 또는 6자리 코드를 입력하세요. 전체 상장 종목 검색 가능합니다."
 )
 
-if user_input:
+# 입력이 있을 때만 분석 실행
+if user_input and user_input.strip():
+    # 이전 결과 완전히 지우기
     target_name, target_ticker = "", ""
     
     # 종목 코드로 검색
@@ -249,7 +281,6 @@ if user_input:
         if not matched.empty:
             target_name = matched.iloc[0]['Name']
         else:
-            # 매칭 실패해도 진행 (코드로 검색)
             target_name = f"종목코드 {target_ticker}"
     # 종목명으로 검색
     else:
@@ -270,21 +301,21 @@ if user_input:
     # Yahoo Finance 티커 형식 변환
     yf_ticker = f"{target_ticker}.KS" if target_ticker.startswith("0") else f"{target_ticker}.KQ"
     
-    # 데이터 수집 (스피너 표시)
+    # 데이터 수집
     with st.spinner(f"'{target_name}' 데이터를 수집하고 AI로 분석 중입니다... ⏳"):
-        # 모든 데이터를 캐시 없이 새로 로드
         stock_data = get_stock_data(yf_ticker)
         news_data = get_news_data(target_name)
         ai_result = analyze_validity(target_ticker, news_data, target_name)
         frac_result = get_fractal_statistics(yf_ticker)
 
-    # 1. 종목명 및 현재가 (여기가 핵심 - 매번 새로 렌더링)
+    # === 여기서부터 완전히 새로 렌더링 ===
+    
+    # 1. 종목명 및 현재가
     st.header(f"🏢 {target_name} ({target_ticker})")
     
     current_price = stock_data.get('price', 0)
     
     if current_price > 0:
-        # 현재가 표시
         st.subheader(f"💵 현재가: **{current_price:,}원**")
         
         # 프랙탈 결과가 있으면 예상 목표가 계산
@@ -292,17 +323,14 @@ if user_input:
             avg_rise = frac_result['avg_rise']
             avg_days = frac_result['avg_days']
             
-            # 목표가 계산
             expected_price = int(current_price * (1 + avg_rise / 100))
             price_diff = expected_price - current_price
             
-            # 상승/하락에 따라 색상 변경
             if avg_rise > 0:
                 st.success(f"🎯 **예상 목표가 ({avg_days:.0f}일 후)**: {expected_price:,}원 ({price_diff:+,}원, {avg_rise:+.2f}%)")
             else:
                 st.error(f"🎯 **예상 목표가 ({avg_days:.0f}일 후)**: {expected_price:,}원 ({price_diff:+,}원, {avg_rise:+.2f}%)")
             
-            # 상세 정보 표시
             col_a, col_b, col_c = st.columns(3)
             with col_a:
                 st.metric("현재가", f"{current_price:,}원")
@@ -322,9 +350,10 @@ if user_input:
         st.markdown("### 📰 최신 뉴스 분석")
         if news_data:
             for idx, news in enumerate(news_data, 1):
-                st.markdown(f"**{idx}.** {news}")
+                # 클릭 가능한 링크로 표시
+                st.markdown(f"**{idx}.** [{news['title']}]({news['link']})")
         else:
-            st.info("최근 뉴스가 없습니다.")
+            st.info(f"'{target_name}' 관련 최신 뉴스가 없습니다.")
         
         st.markdown("---")
         score = ai_result.get('correlation_score', 50)
