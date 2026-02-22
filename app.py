@@ -8,12 +8,10 @@ from scipy.spatial.distance import cosine
 from scipy.stats import zscore
 import plotly.graph_objects as go
 import google.generativeai as genai
-import os
 import warnings
 
 # 경고 메시지 숨기기
 warnings.filterwarnings('ignore')
-st.set_option('deprecation.showPyplotGlobalUse', False)
 
 try:
     import FinanceDataReader as fdr
