@@ -9,13 +9,17 @@ from scipy.stats import zscore
 import plotly.graph_objects as go
 import google.generativeai as genai
 import os
+import warnings
+
+# 경고 메시지 숨기기
+warnings.filterwarnings('ignore')
+st.set_option('deprecation.showPyplotGlobalUse', False)
 
 try:
     import FinanceDataReader as fdr
     FDR_AVAILABLE = True
 except ImportError:
     FDR_AVAILABLE = False
-    st.warning("⚠️ FinanceDataReader를 사용할 수 없습니다. 수동 입력 모드로 전환됩니다.")
 
 # --- [환경 설정 및 API 키] ---
 try:
@@ -25,10 +29,7 @@ try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 except Exception as e:
     st.error(f"⚠️ API 키 설정이 필요합니다. Streamlit Cloud의 Secrets을 확인하세요.")
-    NAVER_CLIENT_ID = ""
-    NAVER_CLIENT_SECRET = ""
-    DART_API_KEY = ""
-    GEMINI_API_KEY = ""
+    st.stop()
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -43,7 +44,6 @@ def get_stock_data(yf_ticker):
         current_price = int(df['Close'].iloc[-1])
         return {"price": current_price}
     except Exception as e:
-        st.error(f"주가 데이터 오류: {e}")
         return {"price": 0}
 
 @st.cache_data(ttl=600)
@@ -104,7 +104,7 @@ def analyze_validity(ticker, news_list):
         return result
         
     except Exception as e:
-        return {"correlation_score": 50, "reason": f"AI 분석 오류"}
+        return {"correlation_score": 50, "reason": f"AI 분석 중 오류가 발생했습니다."}
 
 # --- [3단계] 프랙탈 통계 ---
 @st.cache_data(ttl=86400)
@@ -162,29 +162,45 @@ def get_fractal_statistics(yf_ticker):
 # --- [한국 주식 목록 로드] ---
 @st.cache_data(ttl=3600)
 def load_krx():
+    # 주요 종목 기본 리스트 (항상 사용 가능)
+    default_stocks = pd.DataFrame({
+        'Code': [
+            '005930', '000660', '051910', '035420', '035720', '005380', '068270', 
+            '207940', '006400', '012330', '000270', '373220', '005490', '105560',
+            '028260', '055550', '017670', '096770', '034730', '003670', '018260',
+            '009150', '032830', '015760', '003550', '066570', '011200', '010130',
+            '047050', '090430', '251270', '086520', '326030', '042700', '361610',
+            '036570', '024110', '000100', '033780', '009540', '161390', '021240',
+            '030200', '010950', '267250', '011070', '034020', '302440', '000810',
+            '138040'
+        ],
+        'Name': [
+            '삼성전자', 'SK하이닉스', 'LG화학', 'NAVER', '카카오', '현대차', '셀트리온',
+            '삼성바이오로직스', '삼성SDI', '현대모비스', '기아', 'LG에너지솔루션', 'POSCO홀딩스', 'KB금융',
+            '삼성물산', '신한지주', 'SK텔레콤', '에코프로', 'SK', 'SK이노베이션', '에코프로비엠',
+            '삼성전기', '삼성생명', '한국전력', 'LG', 'LG전자', 'HMM', '고려아연',
+            '포스코퓨처엠', '아모레퍼시픽', '넷마블', '에코프로에이치엔', 'SK바이오팜', '한미약품', 'SK하이닉스우',
+            '엔씨소프트', '기업은행', '유한양행', 'KT&G', 'HD현대중공업', '한국항공우주', '코웨이',
+            'KT', '에스원', '카카오뱅크', 'LG이노텍', 'SK수펙스추', '삼성에스디에스', '삼성화재',
+            '메리츠금융지주'
+        ]
+    })
+    
     if not FDR_AVAILABLE:
-        # FinanceDataReader를 사용할 수 없으면 기본 종목 리스트 반환
-        default_stocks = {
-            'Code': ['005930', '000660', '051910', '035420', '035720', '005380', '068270', '207940', '006400', '012330'],
-            'Name': ['삼성전자', 'SK하이닉스', 'LG화학', 'NAVER', '카카오', '현대차', '셀트리온', '삼성바이오로직스', '삼성SDI', '현대모비스']
-        }
-        return pd.DataFrame(default_stocks)
+        return default_stocks
     
     try:
-        df = fdr.StockListing('KRX')
+        # FinanceDataReader로 전체 목록 시도 (에러 무시)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            df = fdr.StockListing('KRX')
+            
         if df.empty or 'Code' not in df.columns or 'Name' not in df.columns:
-            st.error("종목 리스트 로드 실패. 기본 종목만 사용합니다.")
-            return pd.DataFrame({
-                'Code': ['005930', '000660', '051910', '035420', '035720'],
-                'Name': ['삼성전자', 'SK하이닉스', 'LG화학', 'NAVER', '카카오']
-            })
+            return default_stocks
         return df
-    except Exception as e:
-        st.error(f"종목 리스트 로드 오류: {e}")
-        return pd.DataFrame({
-            'Code': ['005930', '000660', '051910', '035420', '035720'],
-            'Name': ['삼성전자', 'SK하이닉스', 'LG화학', 'NAVER', '카카오']
-        })
+    except:
+        # 실패 시 기본 목록 사용 (에러 메시지 없이)
+        return default_stocks
 
 # --- [웹 UI] ---
 st.set_page_config(page_title="AI 주식 스캐너", layout="wide", page_icon="📈")
@@ -210,48 +226,42 @@ with st.sidebar:
     st.info("💡 **Tip**: 코스피는 0으로 시작, 코스닥은 그 외 숫자")
     
     # 지원 종목 표시
-    with st.expander("📋 지원 종목 예시"):
-        for idx, row in krx_list.head(10).iterrows():
+    with st.expander("📋 주요 지원 종목"):
+        for idx, row in krx_list.head(20).iterrows():
             st.text(f"{row['Name']} ({row['Code']})")
+        if len(krx_list) > 20:
+            st.text(f"... 외 {len(krx_list)-20}개 종목")
 
 # 종목 검색
 user_input = st.text_input(
     "🔍 분석할 종목명 또는 종목코드(6자리)를 입력하세요", 
-    placeholder="예: 삼성전자 또는 005930"
+    placeholder="예: 삼성전자 또는 005930",
+    help="종목명 또는 6자리 코드를 입력하세요. 전체 상장 종목 검색 가능합니다."
 )
 
 if user_input:
     target_name, target_ticker = "", ""
     
-    # 데이터프레임이 비어있는지 확인
-    if krx_list.empty:
-        st.error("❌ 종목 리스트를 불러올 수 없습니다. 6자리 종목코드를 직접 입력해주세요.")
-        if user_input.isdigit() and len(user_input) == 6:
-            target_ticker = user_input
-            target_name = user_input  # 종목명을 알 수 없으므로 코드 사용
+    # 종목 코드로 검색
+    if user_input.isdigit():
+        target_ticker = user_input.zfill(6)
+        matched = krx_list[krx_list['Code'] == target_ticker]
+        if not matched.empty:
+            target_name = matched.iloc[0]['Name']
         else:
-            st.stop()
+            # 매칭 실패해도 진행 (코드로 검색)
+            target_name = f"종목코드 {target_ticker}"
+    # 종목명으로 검색
     else:
-        # 종목 코드로 검색
-        if user_input.isdigit():
-            target_ticker = user_input.zfill(6)
-            matched = krx_list[krx_list['Code'] == target_ticker]
-            if not matched.empty:
-                target_name = matched.iloc[0]['Name']
-            else:
-                # 매칭 실패 시에도 진행
-                target_name = target_ticker
-                st.warning(f"⚠️ 종목 코드 {target_ticker}의 정보를 찾을 수 없습니다. 코드로 검색을 시도합니다.")
-        # 종목명으로 검색
+        target_name = user_input
+        matched = krx_list[krx_list['Name'].str.contains(target_name, na=False, case=False)]
+        if not matched.empty:
+            target_ticker = matched.iloc[0]['Code']
+            target_name = matched.iloc[0]['Name']
         else:
-            target_name = user_input
-            matched = krx_list[krx_list['Name'].str.contains(target_name, na=False)]
-            if not matched.empty:
-                target_ticker = matched.iloc[0]['Code']
-                target_name = matched.iloc[0]['Name']
-            else:
-                st.error("❌ 종목을 찾을 수 없습니다. 6자리 종목코드를 직접 입력해주세요.")
-                st.stop()
+            st.error("❌ 종목을 찾을 수 없습니다. 정확한 종목명 또는 6자리 코드를 입력해주세요.")
+            st.info("💡 사이드바의 '주요 지원 종목'에서 검색 가능한 종목을 확인하세요.")
+            st.stop()
     
     if not target_ticker:
         st.error("❌ 유효한 종목 코드를 입력해주세요.")
@@ -272,7 +282,7 @@ if user_input:
     if current_price > 0:
         st.subheader(f"💵 현재가: **{current_price:,}원**")
     else:
-        st.warning("⚠️ 현재가를 불러올 수 없습니다.")
+        st.warning("⚠️ 현재가를 불러올 수 없습니다. 종목코드를 확인해주세요.")
     
     col1, col2 = st.columns([1, 1])
     
@@ -369,6 +379,7 @@ if user_input:
                     )
         else:
             st.warning("⚠️ 과거 5년 내 유사한 차트 패턴을 찾을 수 없습니다.")
+            st.info("현재 차트가 독특한 패턴이거나, 상장 기간이 짧을 수 있습니다.")
 
 # 푸터
 st.markdown("---")
