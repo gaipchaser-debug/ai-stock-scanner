@@ -33,7 +33,7 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 # --- [1단계] 데이터 수집 ---
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_stock_data(yf_ticker):
     try:
         df = yf.download(yf_ticker, period="5d", progress=False)
@@ -44,7 +44,7 @@ def get_stock_data(yf_ticker):
     except Exception as e:
         return {"price": 0}
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_news_data(company_name):
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         return []
@@ -66,17 +66,18 @@ def get_news_data(company_name):
         return []
 
 # --- [2단계] AI 검증 ---
-def analyze_validity(ticker, news_list):
+def analyze_validity(ticker, news_list, company_name):
+    """캐시 없이 매번 새로 분석"""
     if not GEMINI_API_KEY:
         return {"correlation_score": 50, "reason": "Gemini API 키가 설정되지 않았습니다."}
     
     if not news_list:
         return {"correlation_score": 50, "reason": "최신 뉴스가 없어 중립적으로 평가합니다."}
 
-    prompt = f"""종목코드: {ticker}
+    prompt = f"""종목명: {company_name} (코드: {ticker})
 최신 뉴스: {news_list}
 
-이 뉴스들이 주가에 미치는 영향을 0~100점으로 평가해주세요.
+이 뉴스들이 {company_name} 주가에 미치는 영향을 0~100점으로 평가해주세요.
 호재(긍정적): 70~100점
 중립: 40~69점
 악재(부정적): 0~39점
@@ -105,7 +106,7 @@ def analyze_validity(ticker, news_list):
         return {"correlation_score": 50, "reason": f"AI 분석 중 오류가 발생했습니다."}
 
 # --- [3단계] 프랙탈 통계 ---
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_fractal_statistics(yf_ticker):
     try:
         df = yf.download(yf_ticker, period="5y", progress=False)
@@ -203,6 +204,10 @@ def load_krx():
 # --- [웹 UI] ---
 st.set_page_config(page_title="AI 주식 스캐너", layout="wide", page_icon="📈")
 
+# 세션 상태 초기화
+if 'last_ticker' not in st.session_state:
+    st.session_state.last_ticker = None
+
 # 한국 주식 목록 로드
 krx_list = load_krx()
 
@@ -219,6 +224,7 @@ with st.sidebar:
     2. **AI 분석**: 최신 뉴스의 호재/악재 자동 판단
     3. **프랙탈 분석**: 과거 유사 차트 패턴 발견
     4. **예측**: 과거 패턴 이후 평균 수익률 확인
+    5. **목표가**: 현재가 기준 예상 목표가 제시
     """)
     st.markdown("---")
     st.info("💡 **Tip**: 코스피는 0으로 시작, 코스닥은 그 외 숫자")
@@ -234,7 +240,8 @@ with st.sidebar:
 user_input = st.text_input(
     "🔍 분석할 종목명 또는 종목코드(6자리)를 입력하세요", 
     placeholder="예: 삼성전자 또는 005930",
-    help="종목명 또는 6자리 코드를 입력하세요. 전체 상장 종목 검색 가능합니다."
+    help="종목명 또는 6자리 코드를 입력하세요. 전체 상장 종목 검색 가능합니다.",
+    key="stock_search"
 )
 
 if user_input:
@@ -265,20 +272,53 @@ if user_input:
         st.error("❌ 유효한 종목 코드를 입력해주세요.")
         st.stop()
     
+    # 종목이 변경되었는지 확인
+    ticker_changed = (st.session_state.last_ticker != target_ticker)
+    if ticker_changed:
+        st.session_state.last_ticker = target_ticker
+    
     # Yahoo Finance 티커 형식 변환
     yf_ticker = f"{target_ticker}.KS" if target_ticker.startswith("0") else f"{target_ticker}.KQ"
     
     with st.spinner(f"'{target_name}' 데이터를 수집하고 AI로 분석 중입니다... ⏳"):
         stock_data = get_stock_data(yf_ticker)
         news_data = get_news_data(target_name)
-        ai_result = analyze_validity(target_ticker, news_data)
+        # AI 분석은 캐시 없이 매번 새로 실행
+        ai_result = analyze_validity(target_ticker, news_data, target_name)
         frac_result = get_fractal_statistics(yf_ticker)
 
     # 1. 종목명 및 현재가
     st.header(f"🏢 {target_name} ({target_ticker})")
     current_price = stock_data.get('price', 0)
+    
     if current_price > 0:
         st.subheader(f"💵 현재가: **{current_price:,}원**")
+        
+        # 프랙탈 결과가 있으면 예상 목표가 계산
+        if frac_result:
+            avg_rise = frac_result['avg_rise']
+            avg_days = frac_result['avg_days']
+            
+            # 목표가 계산
+            expected_price = int(current_price * (1 + avg_rise / 100))
+            price_diff = expected_price - current_price
+            
+            # 상승/하락에 따라 색상 변경
+            if avg_rise > 0:
+                st.success(f"🎯 **예상 목표가 ({avg_days:.0f}일 후)**: {expected_price:,}원 ({price_diff:+,}원, {avg_rise:+.2f}%)")
+            else:
+                st.error(f"🎯 **예상 목표가 ({avg_days:.0f}일 후)**: {expected_price:,}원 ({price_diff:+,}원, {avg_rise:+.2f}%)")
+            
+            # 상세 정보 표시
+            col_a, col_b, col_c = st.columns(3)
+            with col_a:
+                st.metric("현재가", f"{current_price:,}원")
+            with col_b:
+                st.metric("예상 목표가", f"{expected_price:,}원", f"{avg_rise:+.2f}%")
+            with col_c:
+                st.metric("예상 기간", f"{avg_days:.0f}일")
+        
+        st.markdown("---")
     else:
         st.warning("⚠️ 현재가를 불러올 수 없습니다. 종목코드를 확인해주세요.")
     
@@ -365,9 +405,10 @@ if user_input:
                 template="plotly_white",
                 height=500
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key=f"chart_{target_ticker}")
             
-            with st.expander("📊 상세 통계"):
+            with st.expander("📊 상세 통계 보기"):
+                st.markdown("**과거 유사 패턴별 상세 정보:**")
                 for i, case in enumerate(frac_result['valid_cases'], 1):
                     st.write(
                         f"**패턴 {i}** ({case['date']}) - "
@@ -383,7 +424,8 @@ if user_input:
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: gray;'>"
-    "Made with ❤️ by AI Stock Scanner | Data: Yahoo Finance, Naver News, Google Gemini"
+    "Made with ❤️ by AI Stock Scanner | Data: Yahoo Finance, Naver News, Google Gemini<br>"
+    "⚠️ 투자 판단의 참고 자료로만 활용하시고, 투자 책임은 본인에게 있습니다."
     "</div>", 
     unsafe_allow_html=True
 )
