@@ -115,7 +115,7 @@ def analyze_validity(ticker, news_list):
 중립: 40~69점
 악재(부정적): 0~39점
 
-반드시 아래 JSON 형식으로만 답변:
+반드시 아래 JSON 형식으로만 답변하세요. 다른 설명이나 마크다운은 포함하지 마세요:
 {{"correlation_score": 점수, "reason": "이유"}}
 """
     
@@ -124,6 +124,7 @@ def analyze_validity(ticker, news_list):
         response = model.generate_content(prompt)
         text = response.text.strip()
         
+        # 마크다운 제거 (여러 형식 대응)
         if text.startswith('```json'):
             text = text[7:]
         if text.startswith('```'):
@@ -131,8 +132,18 @@ def analyze_validity(ticker, news_list):
         if text.endswith('```'):
             text = text[:-3]
         
-        result = json.loads(text.strip())
-        return result
+        text = text.strip()
+        
+        # JSON 파싱 시도
+        try:
+            result = json.loads(text)
+            # 필수 필드 확인
+            if 'correlation_score' not in result or 'reason' not in result:
+                return {"correlation_score": 50, "reason": "AI 응답 형식이 올바르지 않습니다."}
+            return result
+        except json.JSONDecodeError:
+            # JSON 파싱 실패 시 기본값 반환
+            return {"correlation_score": 50, "reason": "AI 분석 응답을 처리할 수 없습니다."}
         
     except Exception as e:
         return {"correlation_score": 50, "reason": f"AI 분석 중 오류가 발생했습니다."}
@@ -229,6 +240,15 @@ def load_krx():
         return df
     except:
         return default_stocks
+
+# ✅ 차트 색상 팔레트 (전역 변수)
+CHART_COLORS = [
+    'rgba(100, 150, 255, 0.7)',  # 파란색
+    'rgba(150, 100, 255, 0.7)',  # 보라색
+    'rgba(255, 150, 100, 0.7)',  # 주황색
+    'rgba(100, 255, 150, 0.7)',  # 초록색
+    'rgba(255, 200, 100, 0.7)'   # 노란색
+]
 
 # --- [웹 UI] ---
 st.set_page_config(page_title="AI 주식 스캐너", layout="wide", page_icon="📈")
@@ -406,20 +426,11 @@ if user_input and user_input.strip():
                     f"⚠️ 과거 유사한 흐름 이후 **평균 {avg_days}일 동안 {avg_rise:+.2f}% 하락**"
                 )
             
-            # ✅ 각 패턴마다 다른 색상 적용
-            colors = [
-                'rgba(100, 150, 255, 0.7)',  # 파란색
-                'rgba(150, 100, 255, 0.7)',  # 보라색
-                'rgba(255, 150, 100, 0.7)',  # 주황색
-                'rgba(100, 255, 150, 0.7)',  # 초록색
-                'rgba(255, 200, 100, 0.7)'   # 노란색
-            ]
-            
             fig = go.Figure()
             
             for i, case in enumerate(frac_result['valid_cases']):
                 past_norm = (case['past_prices'] - case['past_prices'][0]) / case['past_prices'][0] * 100
-                color = colors[i % len(colors)]  # 색상 순환
+                color = CHART_COLORS[i % len(CHART_COLORS)]  # 색상 순환
                 
                 fig.add_trace(go.Scatter(
                     y=past_norm, 
@@ -461,8 +472,8 @@ if user_input and user_input.strip():
             
             with st.expander("📊 상세 통계"):
                 for i, case in enumerate(frac_result['valid_cases'], 1):
-                    # 색상 표시와 함께
-                    color_box = f"<span style='display:inline-block;width:20px;height:20px;background-color:{colors[(i-1)%len(colors)]};border-radius:3px;'></span>"
+                    # ✅ 전역 색상 팔레트 사용
+                    color_box = f"<span style='display:inline-block;width:20px;height:20px;background-color:{CHART_COLORS[(i-1)%len(CHART_COLORS)]};border-radius:3px;'></span>"
                     st.markdown(
                         f"{color_box} **패턴 {i}** ({case['date']}) - "
                         f"유사도: {case['similarity']:.2%} | "
