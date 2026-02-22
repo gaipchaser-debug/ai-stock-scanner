@@ -33,8 +33,8 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 # --- [1단계] 데이터 수집 ---
-@st.cache_data(ttl=600, show_spinner=False)
 def get_stock_data(yf_ticker):
+    """캐시 없이 매번 새로 조회"""
     try:
         df = yf.download(yf_ticker, period="5d", progress=False)
         if df.empty:
@@ -44,8 +44,8 @@ def get_stock_data(yf_ticker):
     except Exception as e:
         return {"price": 0}
 
-@st.cache_data(ttl=600, show_spinner=False)
 def get_news_data(company_name):
+    """캐시 없이 매번 새로 조회"""
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         return []
     try:
@@ -171,7 +171,7 @@ def load_krx():
             '047050', '090430', '251270', '086520', '326030', '042700', '361610',
             '036570', '024110', '000100', '033780', '009540', '161390', '021240',
             '030200', '010950', '267250', '011070', '034020', '302440', '000810',
-            '138040'
+            '138040', '039490'
         ],
         'Name': [
             '삼성전자', 'SK하이닉스', 'LG화학', 'NAVER', '카카오', '현대차', '셀트리온',
@@ -181,7 +181,7 @@ def load_krx():
             '포스코퓨처엠', '아모레퍼시픽', '넷마블', '에코프로에이치엔', 'SK바이오팜', '한미약품', 'SK하이닉스우',
             '엔씨소프트', '기업은행', '유한양행', 'KT&G', 'HD현대중공업', '한국항공우주', '코웨이',
             'KT', '에스원', '카카오뱅크', 'LG이노텍', 'SK수펙스추', '삼성에스디에스', '삼성화재',
-            '메리츠금융지주'
+            '메리츠금융지주', '키움증권'
         ]
     })
     
@@ -203,10 +203,6 @@ def load_krx():
 
 # --- [웹 UI] ---
 st.set_page_config(page_title="AI 주식 스캐너", layout="wide", page_icon="📈")
-
-# 세션 상태 초기화
-if 'last_ticker' not in st.session_state:
-    st.session_state.last_ticker = None
 
 # 한국 주식 목록 로드
 krx_list = load_krx()
@@ -240,8 +236,7 @@ with st.sidebar:
 user_input = st.text_input(
     "🔍 분석할 종목명 또는 종목코드(6자리)를 입력하세요", 
     placeholder="예: 삼성전자 또는 005930",
-    help="종목명 또는 6자리 코드를 입력하세요. 전체 상장 종목 검색 가능합니다.",
-    key="stock_search"
+    help="종목명 또는 6자리 코드를 입력하세요. 전체 상장 종목 검색 가능합니다."
 )
 
 if user_input:
@@ -272,26 +267,24 @@ if user_input:
         st.error("❌ 유효한 종목 코드를 입력해주세요.")
         st.stop()
     
-    # 종목이 변경되었는지 확인
-    ticker_changed = (st.session_state.last_ticker != target_ticker)
-    if ticker_changed:
-        st.session_state.last_ticker = target_ticker
-    
     # Yahoo Finance 티커 형식 변환
     yf_ticker = f"{target_ticker}.KS" if target_ticker.startswith("0") else f"{target_ticker}.KQ"
     
+    # 데이터 수집 (스피너 표시)
     with st.spinner(f"'{target_name}' 데이터를 수집하고 AI로 분석 중입니다... ⏳"):
+        # 모든 데이터를 캐시 없이 새로 로드
         stock_data = get_stock_data(yf_ticker)
         news_data = get_news_data(target_name)
-        # AI 분석은 캐시 없이 매번 새로 실행
         ai_result = analyze_validity(target_ticker, news_data, target_name)
         frac_result = get_fractal_statistics(yf_ticker)
 
-    # 1. 종목명 및 현재가
+    # 1. 종목명 및 현재가 (여기가 핵심 - 매번 새로 렌더링)
     st.header(f"🏢 {target_name} ({target_ticker})")
+    
     current_price = stock_data.get('price', 0)
     
     if current_price > 0:
+        # 현재가 표시
         st.subheader(f"💵 현재가: **{current_price:,}원**")
         
         # 프랙탈 결과가 있으면 예상 목표가 계산
@@ -405,7 +398,7 @@ if user_input:
                 template="plotly_white",
                 height=500
             )
-            st.plotly_chart(fig, use_container_width=True, key=f"chart_{target_ticker}")
+            st.plotly_chart(fig, use_container_width=True)
             
             with st.expander("📊 상세 통계 보기"):
                 st.markdown("**과거 유사 패턴별 상세 정보:**")
