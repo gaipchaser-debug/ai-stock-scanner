@@ -12,38 +12,30 @@ import os
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 import time
+import traceback
 
 try:
     import FinanceDataReader as fdr
     FDR_AVAILABLE = True
 except ImportError:
     FDR_AVAILABLE = False
-    st.warning("⚠️ FinanceDataReader 미설치 - Yahoo Finance로 대체됩니다.")
 
-# --- [환경 설정 및 API 키] ---
+# --- [환경 설정] ---
 try:
     NAVER_CLIENT_ID = st.secrets["NAVER_CLIENT_ID"]
     NAVER_CLIENT_SECRET = st.secrets["NAVER_CLIENT_SECRET"]
-    DART_API_KEY = st.secrets["DART_API_KEY"]
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 except:
     NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "")
     NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "")
-    DART_API_KEY = os.getenv("DART_API_KEY", "")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-if not GEMINI_API_KEY:
-    st.error("🔴 GEMINI_API_KEY가 설정되지 않았습니다.")
-    st.stop()
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
-genai.configure(api_key=GEMINI_API_KEY)
-
-# --- [1단계] 데이터 수집 ---
+# --- [데이터 수집] ---
 def get_stock_data(ticker_code, yf_ticker, days_ago=0):
-    """
-    days_ago=0: 오늘 현재가
-    days_ago=10: 10일 전 종가
-    """
+    """주가 데이터 조회"""
     if FDR_AVAILABLE:
         try:
             end_date = datetime.now() - timedelta(days=days_ago)
@@ -56,80 +48,63 @@ def get_stock_data(ticker_code, yf_ticker, days_ago=0):
             )
             
             if df.empty:
-                return {"price": 0, "date": "", "source": "오류", "dataframe": None}
-            
-            current_price = int(df['Close'].iloc[-1])
-            last_date = df.index[-1].strftime('%Y-%m-%d %H:%M')
+                return {"price": 0, "date": "", "source": "오류"}
             
             return {
-                "price": current_price,
-                "date": last_date,
-                "source": "네이버 금융",
-                "dataframe": df
+                "price": int(df['Close'].iloc[-1]),
+                "date": df.index[-1].strftime('%Y-%m-%d %H:%M'),
+                "source": "네이버 금융"
             }
-        except Exception as e:
+        except:
             pass
     
-    # Fallback to Yahoo Finance
     try:
         df = yf.download(yf_ticker, period="1d", progress=False)
         if df.empty:
-            return {"price": 0, "date": "", "source": "오류", "dataframe": None}
-        
-        current_price = int(df['Close'].iloc[-1])
-        last_date = df.index[-1].strftime('%Y-%m-%d')
+            return {"price": 0, "date": "", "source": "오류"}
         
         return {
-            "price": current_price,
-            "date": last_date,
-            "source": "Yahoo Finance",
-            "dataframe": df
+            "price": int(df['Close'].iloc[-1]),
+            "date": df.index[-1].strftime('%Y-%m-%d'),
+            "source": "Yahoo Finance"
         }
-    except Exception as e:
-        return {"price": 0, "date": "", "source": "오류", "dataframe": None}
+    except:
+        return {"price": 0, "date": "", "source": "오류"}
 
 
 def crawl_news_content(url):
-    """뉴스 기사 본문 크롤링"""
+    """뉴스 본문 크롤링"""
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=5)
         if response.status_code != 200:
             return ""
         
         soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # 네이버 뉴스 본문 추출
-        article = soup.find('article') or soup.find('div', {'id': 'articleBodyContents'}) or soup.find('div', {'class': 'article_body'})
+        article = soup.find('article') or soup.find('div', {'id': 'articleBodyContents'})
         if article:
-            # 스크립트/광고 제거
-            for script in article(['script', 'style', 'aside', 'footer']):
+            for script in article(['script', 'style']):
                 script.decompose()
-            text = article.get_text(strip=True, separator=' ')
-            return text[:1000]  # 최대 1000자
-        
+            return article.get_text(strip=True)[:1000]
         return ""
-    except Exception as e:
+    except:
         return ""
 
 
 def get_news_data(company_name):
-    """뉴스 제목 + 본문 크롤링"""
+    """뉴스 수집"""
     try:
+        if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+            return []
+        
         url = "https://openapi.naver.com/v1/search/news.json"
         headers = {
             "X-Naver-Client-Id": NAVER_CLIENT_ID, 
             "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
         }
-        params = {
-            "query": f"{company_name} 주가", 
-            "display": 10,
-            "sort": "date"
-        }
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        params = {"query": f"{company_name} 주가", "display": 10, "sort": "date"}
         
+        response = requests.get(url, headers=headers, params=params, timeout=10)
         if response.status_code != 200:
             return []
         
@@ -141,11 +116,9 @@ def get_news_data(company_name):
             link = item['link']
             description = item.get('description', '').replace("<b>","").replace("</b>","")
             
-            # 회사명 필터링
             if company_name not in title and company_name not in description:
                 continue
             
-            # 본문 크롤링 (최대 5개)
             content = ""
             if len(news_data) < 5:
                 content = crawl_news_content(link)
@@ -162,86 +135,44 @@ def get_news_data(company_name):
                 break
         
         return news_data
-        
     except Exception as e:
+        st.warning(f"뉴스 수집 오류: {str(e)}")
         return []
 
 
-# --- [2-1단계] 개별 뉴스 호재/악재 분석 ---
 def analyze_single_news(ticker, news_item):
-    """개별 뉴스 하나에 대한 호재/악재 명확한 판단"""
+    """개별 뉴스 분석"""
+    if not GEMINI_API_KEY:
+        return {"sentiment": "중립", "score": 50, "reason": "API 키 없음"}
+    
     text = f"[제목] {news_item['title']}\n[요약] {news_item['description']}"
     if news_item.get('content'):
         text += f"\n[본문] {news_item['content'][:800]}"
     
-    prompt = f"""당신은 20년 경력의 전문 증권 애널리스트입니다. 
-다음 뉴스가 주가에 미치는 영향을 **명확하게** 판단하세요.
+    prompt = f"""전문 증권 애널리스트로서 다음 뉴스를 분석하세요.
 
-**종목코드**: {ticker}
+종목: {ticker}
+뉴스: {text}
 
-**뉴스 내용**:
-{text}
+판단 기준:
+🟢 호재 (70~100점): 실적↑, 수주, 신제품, 투자 유치
+🔴 악재 (0~30점): 실적↓, 소송, 규제, 감원
+🟡 중립 (40~60점): 단순 공지, 영향 불분명
 
-**판단 기준 (엄격하게 적용)**:
-
-🟢 **호재 (70~100점)** - 주가 상승 가능성이 높은 뉴스
-  ✓ 매출/영업이익 증가, 실적 개선
-  ✓ 신규 계약/수주 (특히 대규모)
-  ✓ 기술 혁신, 신제품 출시
-  ✓ 투자 유치, 자금 조달 성공
-  ✓ 시장 점유율 상승
-  ✓ 긍정적 전망, 목표가 상향
-  ✓ 배당 확대, 자사주 매입
-
-🔴 **악재 (0~30점)** - 주가 하락 가능성이 높은 뉴스
-  ✗ 매출/영업이익 감소, 적자
-  ✗ 계약 취소, 수주 실패
-  ✗ 소송, 규제, 제재
-  ✗ 경영진 사퇴/구속
-  ✗ 시장 점유율 하락
-  ✗ 부정적 전망, 목표가 하향
-  ✗ 구조조정, 감원
-
-🟡 **중립 (40~60점)** - 주가 영향이 불분명하거나 단순 사실
-  • 정기 행사/공지 (주총, IR)
-  • 인사 발령 (중립적)
-  • 일반적인 업계 동향
-  • 확정되지 않은 추측성 보도
-
-**중요**: 
-- 뉴스가 "실적 증가", "수주", "매출 상승" 등 긍정적 키워드를 포함하면 **반드시 호재**로 판단
-- 뉴스가 "실적 감소", "적자", "소송", "규제" 등 부정적 키워드를 포함하면 **반드시 악재**로 판단
-- **중립은 최후의 선택**: 명확한 긍정/부정 요소가 없을 때만 사용
-
-**출력 형식** (JSON만):
-{{"sentiment": "호재" or "악재" or "중립", "score": 0~100, "reason": "구체적 이유 50자"}}
-
-예시:
-- "4분기 영업이익 30% 증가" → {{"sentiment": "호재", "score": 88, "reason": "실적 대폭 개선으로 긍정적"}}
-- "소송 패소, 100억 배상" → {{"sentiment": "악재", "score": 25, "reason": "대규모 배상금으로 부정적"}}
-- "정기 주주총회 개최" → {{"sentiment": "중립", "score": 50, "reason": "단순 정기 행사"}}
+JSON 출력:
+{{"sentiment": "호재" or "악재" or "중립", "score": 0~100, "reason": "이유 50자"}}
 """
     
     try:
-        model = genai.GenerativeModel(
-            'gemini-1.5-flash',
-            generation_config={
-                "temperature": 0.1,
-                "top_p": 0.9,
-                "max_output_tokens": 300
-            }
-        )
-        
+        model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt, request_options={"timeout": 15})
         text = response.text.strip()
         
         # JSON 추출
-        if text.startswith('```json'):
-            text = text[7:]
-        if text.startswith('```'):
-            text = text[3:]
-        if text.endswith('```'):
-            text = text[:-3]
+        if '```json' in text:
+            text = text.split('```json')[1].split('```')[0]
+        elif '```' in text:
+            text = text.split('```')[1].split('```')[0]
         
         start = text.find('{')
         end = text.rfind('}') + 1
@@ -249,108 +180,142 @@ def analyze_single_news(ticker, news_item):
             text = text[start:end]
         
         result = json.loads(text.strip())
-        
         sentiment = result.get("sentiment", "중립")
         score = int(float(result.get("score", 50)))
         
-        # 점수 기반 감성 재검증
+        # 재검증
         if score >= 70:
             sentiment = "호재"
         elif score <= 30:
             sentiment = "악재"
-        else:
-            sentiment = "중립"
         
         return {
             "sentiment": sentiment,
-            "score": score,
+            "score": max(0, min(100, score)),
             "reason": result.get("reason", "")[:100]
         }
-        
     except Exception as e:
-        return {"sentiment": "중립", "score": 50, "reason": f"분석 오류: {str(e)[:30]}"}
+        return {"sentiment": "중립", "score": 50, "reason": f"분석 오류"}
 
 
-# --- [2-2단계] 전체 뉴스 종합 분석 ---
-def analyze_validity(ticker, news_data_with_sentiment):
-    """개별 뉴스 감성 종합"""
-    if not news_data_with_sentiment:
-        return {
-            "correlation_score": 50, 
-            "reason": "최신 뉴스가 없어 중립적으로 평가합니다."
-        }
+def analyze_validity(ticker, news_with_sentiment):
+    """종합 분석"""
+    if not news_with_sentiment:
+        return {"correlation_score": 50, "reason": "뉴스 없음"}
     
-    # 점수 평균
-    scores = [n["sentiment_data"]["score"] for n in news_data_with_sentiment]
+    scores = [n["sentiment_data"]["score"] for n in news_with_sentiment]
+    sentiments = [n["sentiment_data"]["sentiment"] for n in news_with_sentiment]
+    
     avg_score = int(np.mean(scores))
+    positive = sentiments.count("호재")
+    negative = sentiments.count("악재")
     
-    # 호재/악재 카운트
-    sentiments = [n["sentiment_data"]["sentiment"] for n in news_data_with_sentiment]
-    positive_count = sentiments.count("호재")
-    negative_count = sentiments.count("악재")
-    neutral_count = sentiments.count("중립")
-    
-    # 종합 판단
-    if positive_count > negative_count:
-        if positive_count >= 3:
-            reason = f"강한 호재! 호재 뉴스 {positive_count}개, 악재 {negative_count}개로 긍정적 전망"
-        else:
-            reason = f"호재 뉴스 {positive_count}개, 악재 {negative_count}개로 긍정적 전망"
-    elif negative_count > positive_count:
-        if negative_count >= 3:
-            reason = f"강한 악재! 악재 뉴스 {negative_count}개, 호재 {positive_count}개로 부정적 전망"
-        else:
-            reason = f"악재 뉴스 {negative_count}개, 호재 {positive_count}개로 부정적 전망"
+    if positive > negative:
+        reason = f"호재 {positive}개, 악재 {negative}개 - 긍정적"
+    elif negative > positive:
+        reason = f"악재 {negative}개, 호재 {positive}개 - 부정적"
     else:
-        reason = f"혼재 상황: 호재 {positive_count}개, 악재 {negative_count}개, 중립 {neutral_count}개"
+        reason = f"호재 {positive}개, 악재 {negative}개 - 혼재"
     
-    return {
-        "correlation_score": avg_score,
-        "reason": reason
-    }
+    return {"correlation_score": avg_score, "reason": reason}
 
 
-# --- [3단계] 크로스 종목 프랙탈 통계 (전체 KRX에서 유사 패턴 검색) ---
-@st.cache_data(ttl=3600)
-def get_cross_stock_fractal(current_ticker, current_prices, similarity_threshold=0.95):
-    """
-    혁신적 기능: 현재 종목의 14일 패턴과 유사한 패턴을 **다른 모든 종목**에서도 검색
-    - 단일 종목이 아닌 전체 시장에서 유사 패턴 찾기
-    - "이런 차트 모양은 보통 이렇게 진행된다" 일반 법칙 발견
-    """
+# --- [2주 전 백테스팅] ---
+def backtest_2weeks_ago(ticker_code, yf_ticker):
+    """2주 전 검색했다면?"""
     try:
-        # KRX 전체 종목 로드
-        if not FDR_AVAILABLE:
+        # 2주 전 데이터
+        past_data = get_stock_data(ticker_code, yf_ticker, days_ago=14)
+        past_price = past_data["price"]
+        
+        if past_price == 0:
             return None
         
-        krx_df = fdr.StockListing('KRX')
+        # 2주 전 프랙탈 분석
+        df_past = yf.download(yf_ticker, period="3mo", progress=False)
+        if len(df_past) < 28:
+            return None
         
-        # 현재 종목 제외, 시가총액 상위 100개만 (속도 최적화)
-        krx_df = krx_df[krx_df['Code'] != current_ticker].head(100)
+        # 2주 전 시점의 최근 14일
+        two_weeks_ago_idx = len(df_past) - 14
+        if two_weeks_ago_idx < 14:
+            return None
+        
+        past_14d = df_past['Close'].values[two_weeks_ago_idx-14:two_weeks_ago_idx]
+        
+        # 간단한 예측: 이전 14일 평균 상승률
+        if len(past_14d) >= 14:
+            avg_change = ((past_14d[-1] - past_14d[0]) / past_14d[0]) * 100
+            predicted_price = int(past_price * (1 + avg_change / 100))
+        else:
+            return None
+        
+        # 실제 현재 가격
+        current_data = get_stock_data(ticker_code, yf_ticker, days_ago=0)
+        current_price = current_data["price"]
+        
+        actual_rise = ((current_price - past_price) / past_price) * 100
+        predicted_rise = avg_change
+        
+        # 정확도
+        if predicted_rise > 0 and actual_rise > 0:
+            accuracy = min(predicted_rise, actual_rise) / max(predicted_rise, actual_rise) * 100
+        elif predicted_rise < 0 and actual_rise < 0:
+            accuracy = min(abs(predicted_rise), abs(actual_rise)) / max(abs(predicted_rise), abs(actual_rise)) * 100
+        else:
+            accuracy = 0
+        
+        return {
+            "past_price": past_price,
+            "predicted_price": predicted_price,
+            "predicted_rise": predicted_rise,
+            "actual_price": current_price,
+            "actual_rise": actual_rise,
+            "accuracy": round(accuracy, 1),
+            "direction_match": (predicted_rise > 0 and actual_rise > 0) or (predicted_rise < 0 and actual_rise < 0)
+        }
+    except Exception as e:
+        return None
+
+
+# --- [크로스 종목 프랙탈] ---
+def get_cross_stock_fractal(current_ticker, current_prices, similarity_threshold=0.95):
+    """전체 KRX에서 유사 패턴 검색"""
+    try:
+        if not FDR_AVAILABLE:
+            st.warning("FinanceDataReader가 필요합니다.")
+            return None
+        
+        # 현재 패턴 정규화
+        if np.std(current_prices) < 0.01:
+            return None
         
         current_z = zscore(current_prices)
+        
+        # KRX 종목 로드
+        krx_df = fdr.StockListing('KRX')
+        krx_df = krx_df[krx_df['Code'] != current_ticker].head(50)  # 100→50개로 축소 (속도)
+        
         similarities = []
-        
-        st.info(f"🔍 전체 KRX 종목 중 상위 100개에서 유사 패턴 검색 중... (유사도 {similarity_threshold*100:.0f}% 이상)")
-        
         progress_bar = st.progress(0)
+        status_text = st.empty()
         
-        for idx, row in krx_df.iterrows():
+        for idx, (_, row) in enumerate(krx_df.iterrows()):
             progress_bar.progress((idx + 1) / len(krx_df))
+            status_text.text(f"검색 중... {idx+1}/{len(krx_df)} ({row['Name']})")
             
             ticker = row['Code']
             name = row['Name']
             yf_ticker = ticker + ".KS" if ticker[0] == '0' else ticker + ".KQ"
             
             try:
-                # 최근 1년 데이터
                 df = yf.download(yf_ticker, period="1y", progress=False)
                 if len(df) < 50:
                     continue
                 
                 closes = df['Close'].values
                 
-                # 14일 윈도우로 스캔
+                # 14일 윈도우 스캔
                 for i in range(len(closes) - 28):
                     past_window = closes[i:i+14]
                     
@@ -391,33 +356,29 @@ def get_cross_stock_fractal(current_ticker, current_prices, similarity_threshold
                 continue
         
         progress_bar.empty()
+        status_text.empty()
         
         if not similarities:
             return None
         
-        # 유사도 순 정렬 후 상위 10개
+        # 상위 10개
         similarities.sort(key=lambda x: x["similarity"], reverse=True)
         valid_cases = similarities[:10]
         
-        avg_rise = round(np.mean([c["rise_pct"] for c in valid_cases]), 2)
-        avg_days = round(np.mean([c["days_to_max"] for c in valid_cases]), 1)
-        
         return {
-            "avg_rise": avg_rise,
-            "avg_days": avg_days,
+            "avg_rise": round(np.mean([c["rise_pct"] for c in valid_cases]), 2),
+            "avg_days": round(np.mean([c["days_to_max"] for c in valid_cases]), 1),
             "valid_cases": valid_cases,
             "current_prices": current_prices
         }
-        
     except Exception as e:
-        st.error(f"크로스 종목 분석 오류: {str(e)[:100]}")
+        st.error(f"크로스 분석 오류: {str(e)}")
         return None
 
 
-# --- [한국 주식 목록] ---
+# --- [주식 목록] ---
 @st.cache_data(ttl=3600)
 def load_krx():
-    """한국거래소 상장 종목"""
     if FDR_AVAILABLE:
         try:
             df = fdr.StockListing('KRX')
@@ -425,22 +386,9 @@ def load_krx():
         except:
             pass
     
-    # 기본 목록
     return pd.DataFrame({
-        'Code': ['005930', '000660', '035420', '051910', '035720', '207940', '005490', '068270', 
-                 '006400', '105560', '055550', '096770', '028260', '012330', '017670', '032830',
-                 '066570', '003550', '015760', '034730', '018260', '011200', '030200', '051900',
-                 '010950', '036570', '024110', '086790', '009150', '029780', '064350', '003490',
-                 '161390', '000270', '010130', '047050', '042660', '003670', '011070', '034220',
-                 '139480', '090430', '004020', '251270', '000100', '259960', '095720', '000810',
-                 '033780', '006260', '039490'],
-        'Name': ['삼성전자', 'SK하이닉스', 'NAVER', 'LG화학', '카카오', '삼성바이오로직스', 'POSCO홀딩스', '셀트리온',
-                 '삼성SDI', 'KB금융', '신한지주', 'SK이노베이션', '삼성물산', '현대모비스', 'SK텔레콤', '삼성생명',
-                 'LG전자', 'LG', '한국전력', 'SK', '삼성에스디에스', 'HMM', 'KT&G', 'LG생활건강',
-                 'S-Oil', '엔씨소프트', '기업은행', '하나금융지주', '삼성전기', 'SKC', '현대로템', 'CJ제일제당',
-                 '한국타이어앤테크놀로지', '기아', '고려아연', '포스코인터내셔널', '한진칼', '포스코퓨처엠', 'LG이노텍', 'LG디스플레이',
-                 '이마트', '아모레퍼시픽', '현대건설', '넷마블', '유한양행', '크래프톤', '웹젠', '삼성화재',
-                 'KT', 'LS', '키움증권']
+        'Code': ['005930', '000660', '035420', '051910', '035720'],
+        'Name': ['삼성전자', 'SK하이닉스', 'NAVER', 'LG화학', '카카오']
     })
 
 
@@ -448,66 +396,43 @@ def load_krx():
 # ========================= UI 레이아웃 ============================
 # ==================================================================
 
-st.set_page_config(
-    page_title="AI 주식 팩트 스캐너",
-    page_icon="📈",
-    layout="wide"
-)
+st.set_page_config(page_title="AI 주식 팩트 스캐너", page_icon="📈", layout="wide")
 
-# 페이지 새로고침 시 세션 완전 초기화
-if 'initialized' not in st.session_state:
-    st.session_state.clear()
-    st.session_state.initialized = True
+# 세션 초기화
+if 'last_input' not in st.session_state:
+    st.session_state.last_input = None
 
 st.title("📈 AI 주식 팩트 스캐너")
-st.caption("크로스 종목 유사 패턴 분석 + 명확한 호재/악재 분석")
+st.caption("크로스 종목 유사 패턴 분석 + 2주 전 백테스팅")
 
-# --- 사이드바 ---
+# 사이드바
 with st.sidebar:
     st.header("📌 사용 방법")
     st.markdown("""
-    1️⃣ **종목명 또는 코드 입력**
-    2️⃣ **각 뉴스별 호재/악재 명확 분석**
-    3️⃣ **전체 KRX 종목에서 유사 패턴 검색**
-    4️⃣ **"이런 차트는 보통 이렇게 진행된다" 법칙 발견**
+    1️⃣ 종목명/코드 입력
+    2️⃣ 뉴스 호재/악재 분석
+    3️⃣ 2주 전 백테스팅
+    4️⃣ 전체 시장 유사 패턴 검색
     """)
     
     st.divider()
-    
-    st.subheader("🎚️ 유사도 설정")
-    similarity_threshold = st.slider(
-        "크로스 종목 유사도",
-        min_value=90,
-        max_value=99,
-        value=95,
-        step=1,
-        help="전체 종목에서 현재 차트와 유사한 패턴을 찾는 기준 (95% 이상 권장)"
-    )
+    similarity_threshold = st.slider("유사도 기준 (%)", 90, 99, 95, 1)
     
     st.divider()
-    
     st.subheader("📋 인기 종목")
-    popular_stocks = ["삼성전자", "SK하이닉스", "NAVER", "카카오", "LG화학", "셀트리온"]
-    for stock in popular_stocks:
+    for stock in ["삼성전자", "SK하이닉스", "NAVER", "카카오", "LG화학"]:
         st.markdown(f"• {stock}")
 
-# --- 메인 영역 ---
-# 입력란에 고유 key 부여 + on_change 콜백
-def clear_cache():
-    """입력 변경 시 캐시 완전 초기화"""
-    st.cache_data.clear()
-
-user_input = st.text_input(
-    "🔍 종목명 또는 코드 입력",
-    placeholder="예: 삼성전자, 005930, LG화학",
-    key="stock_input_unique",
-    on_change=clear_cache
-)
+# 메인
+user_input = st.text_input("🔍 종목명 또는 코드 입력", placeholder="예: 삼성전자, 005930")
 
 if user_input:
-    # 종목 검색
-    krx_df = load_krx()
+    # 입력 변경 감지
+    if st.session_state.last_input != user_input:
+        st.session_state.last_input = user_input
+        st.cache_data.clear()
     
+    krx_df = load_krx()
     matched = krx_df[
         (krx_df['Name'].str.contains(user_input, na=False)) | 
         (krx_df['Code'] == user_input)
@@ -521,108 +446,105 @@ if user_input:
     company_name = matched.iloc[0]['Name']
     yf_ticker = ticker_code + ".KS" if ticker_code[0] == '0' else ticker_code + ".KQ"
     
-    # 강제 헤더 갱신 (캐시 우회)
     st.header(f"🏢 {company_name} ({ticker_code})")
-    st.caption(f"입력 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.caption(f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # --- 현재가 ---
+    # 현재가
     stock_data = get_stock_data(ticker_code, yf_ticker)
-    current_price = stock_data["price"]
-    
-    if current_price > 0:
+    if stock_data["price"] > 0:
         col1, col2 = st.columns([1, 2])
         with col1:
-            st.metric("💵 현재가", f"{current_price:,}원")
+            st.metric("💵 현재가", f"{stock_data['price']:,}원")
             st.caption(f"📅 {stock_data['date']} ({stock_data['source']})")
-    else:
-        st.warning("⚠️ 현재가 정보를 가져올 수 없습니다.")
     
     st.divider()
     
-    # --- 뉴스 + AI 분석 ---
-    st.subheader("📰 최신 뉴스 호재/악재 명확 분석")
+    # === 2주 전 백테스팅 ===
+    st.subheader("⏮️ 2주 전(14일 전) 검색했다면?")
     
-    with st.spinner("뉴스 수집 및 AI 분석 중..."):
-        news_data = get_news_data(company_name)
+    with st.spinner("백테스팅 분석 중..."):
+        backtest = backtest_2weeks_ago(ticker_code, yf_ticker)
+    
+    if backtest:
+        col1, col2, col3, col4 = st.columns(4)
         
-        # 각 뉴스별 감성 분석
-        news_with_sentiment = []
-        for news in news_data:
-            sentiment_result = analyze_single_news(ticker_code, news)
-            news_with_sentiment.append({
-                **news,
-                "sentiment_data": sentiment_result
-            })
-        
-        # 종합 분석
-        ai_result = analyze_validity(ticker_code, news_with_sentiment)
+        with col1:
+            st.metric("2주 전 가격", f"{backtest['past_price']:,}원")
+        with col2:
+            st.metric("AI 예측", f"{backtest['predicted_price']:,}원", 
+                     f"{backtest['predicted_rise']:+.2f}%")
+        with col3:
+            st.metric("실제(오늘)", f"{backtest['actual_price']:,}원",
+                     f"{backtest['actual_rise']:+.2f}%")
+        with col4:
+            accuracy = backtest['accuracy']
+            direction = "✅" if backtest['direction_match'] else "❌"
+            star = "⭐" * min(5, int(accuracy / 20) + 1)
+            st.metric("정확도", f"{accuracy:.1f}% {star}")
+            st.caption(f"{direction} 방향 {'적중' if backtest['direction_match'] else '불일치'}")
+    else:
+        st.info("💡 백테스팅 데이터 부족 (최소 1개월 데이터 필요)")
     
-    score = ai_result["correlation_score"]
-    reason = ai_result["reason"]
+    st.divider()
     
-    # 점수 시각화
-    col1, col2 = st.columns([1, 3])
+    # 뉴스 분석
+    st.subheader("📰 최신 뉴스 호재/악재 분석")
     
-    with col1:
-        if score >= 70:
-            status = "🟢 호재"
-        elif score >= 40:
-            status = "🟡 중립"
-        else:
-            status = "🔴 악재"
-        
-        st.markdown(f"### {status}")
-        st.markdown(f"**종합 점수**: {score}/100")
-    
-    with col2:
-        st.markdown("**종합 분석**")
-        st.info(reason)
-    
-    # 점수 바
-    st.progress(score / 100)
-    
-    # 뉴스 목록
-    if news_with_sentiment:
-        st.markdown("**📄 개별 뉴스 분석 결과**")
-        
-        for idx, news in enumerate(news_with_sentiment, 1):
-            sentiment = news["sentiment_data"]["sentiment"]
-            s_score = news["sentiment_data"]["score"]
-            s_reason = news["sentiment_data"]["reason"]
+    try:
+        with st.spinner("뉴스 수집 및 AI 분석 중..."):
+            news_data = get_news_data(company_name)
             
-            if sentiment == "호재":
-                emoji = "🟢"
-            elif sentiment == "악재":
-                emoji = "🔴"
+            news_with_sentiment = []
+            for news in news_data:
+                sentiment_result = analyze_single_news(ticker_code, news)
+                news_with_sentiment.append({**news, "sentiment_data": sentiment_result})
+            
+            ai_result = analyze_validity(ticker_code, news_with_sentiment)
+        
+        score = ai_result["correlation_score"]
+        
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if score >= 70:
+                st.markdown("### 🟢 호재")
+            elif score >= 40:
+                st.markdown("### 🟡 중립")
             else:
-                emoji = "🟡"
+                st.markdown("### 🔴 악재")
+            st.markdown(f"**점수**: {score}/100")
+        
+        with col2:
+            st.info(ai_result["reason"])
+        
+        st.progress(score / 100)
+        
+        if news_with_sentiment:
+            st.markdown("**📄 개별 뉴스**")
+            for news in news_with_sentiment:
+                s = news["sentiment_data"]
+                emoji = "🟢" if s["sentiment"]=="호재" else ("🔴" if s["sentiment"]=="악재" else "🟡")
+                
+                with st.expander(f"{emoji} {s['sentiment']} ({s['score']}점) | {news['title'][:50]}..."):
+                    st.markdown(f"**근거**: {s['reason']}")
+                    st.markdown(f"**링크**: {news['link']}")
+        else:
+            st.warning("뉴스를 찾을 수 없습니다.")
             
-            with st.expander(f"{emoji} **{sentiment}** ({s_score}점) | {news['title'][:60]}..."):
-                st.markdown(f"**분석 근거**: {s_reason}")
-                st.markdown(f"**링크**: [{news['link']}]({news['link']})")
-                st.markdown(f"**요약**: {news['description']}")
-                if news.get('content'):
-                    st.markdown(f"**본문**: {news['content'][:300]}...")
-    else:
-        st.warning("최신 뉴스를 찾을 수 없습니다.")
+    except Exception as e:
+        st.error(f"뉴스 분석 오류: {str(e)}")
     
     st.divider()
     
-    # --- 크로스 종목 프랙탈 분석 ---
-    st.subheader("🌐 전체 시장 유사 패턴 분석 (크로스 종목)")
-    st.info("""
-    💡 **혁신적 기능**: 현재 종목의 2주 차트 패턴과 유사한 패턴을 **다른 모든 종목**에서도 검색합니다.
+    # 크로스 종목 분석
+    st.subheader("🌐 전체 시장 유사 패턴 분석")
+    st.info("💡 현재 차트와 유사한 패턴을 **다른 종목**에서도 검색합니다.")
     
-    "이런 차트 모양은 보통 이렇게 진행된다"는 일반 법칙을 발견하여 미래 예측 정확도를 높입니다.
-    """)
-    
-    # 현재 종목의 최근 14일 데이터
     try:
         df_current = yf.download(yf_ticker, period="3mo", progress=False)
         if len(df_current) >= 14:
             current_prices = df_current['Close'].values[-14:]
             
-            with st.spinner(f"🔍 KRX 전체 종목에서 유사도 {similarity_threshold}% 이상 패턴 검색 중... (최대 2분 소요)"):
+            with st.spinner("🔍 KRX 50개 종목 검색 중... (1~2분)"):
                 cross_fractal = get_cross_stock_fractal(
                     ticker_code, 
                     current_prices,
@@ -631,109 +553,76 @@ if user_input:
             
             if cross_fractal:
                 avg_rise = cross_fractal["avg_rise"]
-                avg_days = cross_fractal["avg_days"]
                 
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("📈 평균 예상 상승률", f"{avg_rise:+.2f}%")
+                    st.metric("📈 평균 상승률", f"{avg_rise:+.2f}%")
                 with col2:
-                    st.metric("📅 평균 최고가 도달일", f"{avg_days:.1f}일")
+                    st.metric("📅 최고가 도달", f"{cross_fractal['avg_days']:.1f}일")
                 with col3:
-                    st.metric("🔍 발견된 유사 패턴", f"{len(cross_fractal['valid_cases'])}개")
+                    st.metric("🔍 발견 패턴", f"{len(cross_fractal['valid_cases'])}개")
                 
-                # 목표가
-                target_price = int(current_price * (1 + avg_rise / 100))
-                st.success(f"🎯 **AI 예상 목표가**: {target_price:,}원 (현재가 대비 {avg_rise:+.2f}%)")
+                target_price = int(stock_data['price'] * (1 + avg_rise / 100))
+                st.success(f"🎯 예상 목표가: {target_price:,}원 ({avg_rise:+.2f}%)")
                 
                 # 차트
                 fig = go.Figure()
                 
-                # 현재 패턴 (빨간색)
+                # 현재
                 fig.add_trace(go.Scatter(
                     x=list(range(14)),
                     y=current_prices.tolist(),
                     mode='lines+markers',
-                    name=f'{company_name} 현재 패턴',
-                    line=dict(color='red', width=3),
-                    marker=dict(size=8)
+                    name=f'{company_name} 현재',
+                    line=dict(color='red', width=3)
                 ))
                 
-                # 유사 패턴 (다른 종목들)
-                colors = ['gray', 'lightgray', 'darkgray', 'silver', 'dimgray', 
-                         'slategray', 'lightslategray', 'darkslategray', 'gainsboro', 'whitesmoke']
-                
-                for idx, case in enumerate(cross_fractal["valid_cases"][:5]):  # 상위 5개만 표시
+                # 유사 패턴
+                colors = ['gray', 'lightgray', 'darkgray', 'silver', 'dimgray']
+                for idx, case in enumerate(cross_fractal["valid_cases"][:5]):
                     past_with_future = case["past_with_future"]
                     
-                    # 과거 14일
                     fig.add_trace(go.Scatter(
                         x=list(range(14)),
                         y=past_with_future[:14],
                         mode='lines',
-                        name=f'{case["name"]} ({case["date"]}, {case["similarity"]:.1%})',
-                        line=dict(color=colors[idx], width=2, dash='solid')
+                        name=f'{case["name"]} ({case["similarity"]:.1%})',
+                        line=dict(color=colors[idx%5], width=2)
                     ))
                     
-                    # 미래 14일
                     fig.add_trace(go.Scatter(
                         x=list(range(13, 28)),
                         y=past_with_future[13:28],
                         mode='lines',
-                        name=f'{case["name"]} 미래 (+{case["rise_pct"]:.1f}%)',
-                        line=dict(color=colors[idx], width=2, dash='dot'),
+                        line=dict(color=colors[idx%5], width=2, dash='dot'),
                         showlegend=False
                     ))
                 
-                # 현재 시점
-                fig.add_vline(
-                    x=13.5,
-                    line=dict(color='blue', width=2, dash='dash'),
-                    annotation_text="현재 시점",
-                    annotation_position="top"
-                )
-                
+                fig.add_vline(x=13.5, line=dict(color='blue', dash='dash'))
                 fig.update_layout(
-                    title=f"{company_name} vs 전체 시장 유사 패턴 비교 (유사도 {similarity_threshold}% 이상)",
-                    xaxis_title="거래일 (14일 이후는 유사 사례의 미래 흐름)",
-                    yaxis_title="정규화된 주가",
-                    hovermode='x unified',
-                    height=600
+                    title=f"{company_name} vs 시장 유사 패턴",
+                    xaxis_title="거래일",
+                    yaxis_title="주가",
+                    height=500
                 )
                 
-                st.plotly_chart(fig, use_container_width=True, key=f"cross_chart_{ticker_code}_{similarity_threshold}")
+                st.plotly_chart(fig, use_container_width=True)
                 
-                # 상세 통계
-                with st.expander("📋 유사 패턴 상세 통계 (전체 종목)"):
+                with st.expander("📋 상세 통계"):
                     for idx, case in enumerate(cross_fractal["valid_cases"], 1):
                         st.markdown(f"""
-                        **패턴 {idx}** - **{case['name']}** ({case['ticker']})
-                        - 발생 시점: {case['date']}
+                        **패턴 {idx}** - {case['name']} ({case['ticker']})
+                        - 날짜: {case['date']}
                         - 유사도: {case['similarity']:.2%}
-                        - 14일 후 상승률: {case['rise_pct']:+.2f}%
-                        - 최고가 도달: {case['days_to_max']}일째
+                        - 14일 후: {case['rise_pct']:+.2f}%
                         """)
                         st.divider()
-                
-                st.success(f"""
-                ✅ **결론**: 현재 {company_name}의 차트 패턴과 유사한 패턴이 과거 다른 종목에서 {len(cross_fractal['valid_cases'])}번 발생했으며,
-                평균적으로 **{avg_days:.1f}일 후 {avg_rise:+.2f}% 변동**했습니다.
-                """)
-                
             else:
-                st.warning(f"""
-                ⚠️ 유사도 {similarity_threshold}% 이상의 패턴을 다른 종목에서 찾지 못했습니다.
-                
-                💡 **해결 방법**:
-                - 사이드바에서 유사도 기준을 낮춰보세요 (90~93%)
-                - 현재 차트가 매우 독특한 패턴일 수 있습니다
-                - 시장 전체가 비슷한 흐름일 때는 유사 패턴이 적을 수 있습니다
-                """)
+                st.warning(f"유사도 {similarity_threshold}% 이상 패턴을 찾지 못했습니다. 기준을 낮춰보세요.")
         else:
-            st.error("현재 종목의 데이터가 부족합니다 (최소 14일 필요).")
-            
+            st.error("데이터 부족 (최소 14일 필요)")
     except Exception as e:
-        st.error(f"데이터 로딩 오류: {str(e)}")
+        st.error(f"크로스 분석 오류: {str(e)}\n{traceback.format_exc()}")
 
-# --- 푸터 ---
 st.divider()
-st.caption("© 2026 AI 주식 팩트 스캐너 | 크로스 종목 유사 패턴 분석 + 명확한 호재/악재 분석")
+st.caption("© 2026 AI 주식 팩트 스캐너")
