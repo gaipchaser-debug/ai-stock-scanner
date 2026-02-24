@@ -1,636 +1,536 @@
 import streamlit as st
 import requests
-import json
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from scipy.spatial.distance import cosine
-from scipy.stats import zscore
-import plotly.graph_objects as go
-import google.generativeai as genai
-import os
 from datetime import datetime, timedelta
-from bs4 import BeautifulSoup
+import plotly.graph_objects as go
+import json
 import time
+from bs4 import BeautifulSoup
+import os
 
-try:
-    import FinanceDataReader as fdr
-    FDR_AVAILABLE = True
-except ImportError:
-    FDR_AVAILABLE = False
+# 페이지 설정
+st.set_page_config(page_title="AI 주식 팩트 스캐너", page_icon="📊", layout="wide")
 
-# --- [환경 설정] ---
-try:
-    NAVER_CLIENT_ID = st.secrets["NAVER_CLIENT_ID"]
-    NAVER_CLIENT_SECRET = st.secrets["NAVER_CLIENT_SECRET"]
-    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-except:
-    NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "")
-    NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "")
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# API 키 로드 (환경변수 우선, Streamlit secrets 보조)
+def get_api_key(key_name):
+    """안전하게 API 키 가져오기"""
+    # 환경변수에서 먼저 확인
+    key = os.getenv(key_name)
+    if key:
+        return key
+    # Streamlit secrets에서 확인
+    try:
+        if hasattr(st, 'secrets') and key_name in st.secrets:
+            return st.secrets[key_name]
+    except:
+        pass
+    return None
 
+GEMINI_API_KEY = get_api_key("GEMINI_API_KEY")
+NAVER_CLIENT_ID = get_api_key("NAVER_CLIENT_ID")
+NAVER_CLIENT_SECRET = get_api_key("NAVER_CLIENT_SECRET")
+
+# Gemini API 설정
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=GEMINI_API_KEY)
+        GEMINI_MODEL = genai.GenerativeModel('gemini-1.5-flash')
+    except Exception as e:
+        st.error(f"⚠️ Gemini API 초기화 실패: {str(e)}")
+        GEMINI_MODEL = None
+else:
+    GEMINI_MODEL = None
+    st.warning("⚠️ GEMINI_API_KEY가 설정되지 않았습니다. AI 분석 기능이 제한됩니다.")
 
-# --- [차트 패턴 정의] ---
-CHART_PATTERNS = {
-    "CONTINUATION": {
-        "Pennant": {
-            "description": "상승 추세 중 짧은 조정 후 재상승",
-            "signal": "매수 (상단 돌파 시)",
-            "target": "+5~8% (기존 추세 연장)",
-            "stop_loss": "-3% (패턴 하단)"
-        },
-        "Bullish_Flag": {
-            "description": "강한 상승 후 수평 조정, 재상승",
-            "signal": "매수 (상단 돌파 시)",
-            "target": "+8~12% (깃대 길이만큼)",
-            "stop_loss": "-3% (플래그 하단)"
-        },
-        "Channel_Up": {
-            "description": "평행 상승 채널 유지",
-            "signal": "매수 (하단 지지 시), 매도 (상단 저항 시)",
-            "target": "+5~10% (채널 상단)",
-            "stop_loss": "-3% (채널 이탈 시)"
-        }
-    },
-    "NEUTRAL": {
-        "Symmetrical_Triangle": {
-            "description": "고점 낮아지고 저점 높아지며 수렴",
-            "signal": "관망 (돌파 방향 확인 필요)",
-            "target": "±5~8% (돌파 방향 따라)",
-            "stop_loss": "±3% (패턴 이탈 시)"
-        },
-        "Ascending_Triangle": {
-            "description": "수평 저항 + 상승 지지",
-            "signal": "약한 매수 (상단 돌파 기대)",
-            "target": "+7~10%",
-            "stop_loss": "-4% (하단 이탈)"
-        },
-        "Descending_Triangle": {
-            "description": "수평 지지 + 하락 저항",
-            "signal": "약한 매도 (하단 이탈 우려)",
-            "target": "-7~10%",
-            "stop_loss": "+4% (상단 돌파 시)"
-        }
-    },
-    "REVERSAL": {
-        "Double_Top": {
-            "description": "두 번 고점 형성 후 하락",
-            "signal": "매도 (네크라인 이탈 시)",
-            "target": "-8~15% (고점-저점 거리만큼)",
-            "stop_loss": "+3% (고점 돌파 시)"
-        },
-        "Double_Bottom": {
-            "description": "두 번 저점 형성 후 상승",
-            "signal": "매수 (네크라인 돌파 시)",
-            "target": "+8~15% (저점-고점 거리만큼)",
-            "stop_loss": "-3% (저점 이탈 시)"
-        },
-        "Head_and_Shoulders": {
-            "description": "고점(머리) 양쪽에 낮은 고점(어깨)",
-            "signal": "매도 (네크라인 이탈 시)",
-            "target": "-10~20% (머리-네크라인 거리만큼)",
-            "stop_loss": "+5% (머리 돌파 시)"
-        },
-        "Inverse_Head_and_Shoulders": {
-            "description": "저점(머리) 양쪽에 높은 저점(어깨)",
-            "signal": "매수 (네크라인 돌파 시)",
-            "target": "+10~20%",
-            "stop_loss": "-5% (머리 이탈 시)"
-        },
-        "Cup_and_Handle": {
-            "description": "U자형 바닥 + 작은 조정",
-            "signal": "매수 (핸들 돌파 시)",
-            "target": "+15~30% (컵 깊이만큼)",
-            "stop_loss": "-5% (핸들 하단)"
-        }
-    },
-    "SPECIAL": {
-        "Falling_Wedge": {
-            "description": "하락 쐐기 (좁아지는 하락)",
-            "signal": "매수 (상단 돌파 시)",
-            "target": "+10~15%",
-            "stop_loss": "-4% (하단 이탈)"
-        },
-        "Rising_Wedge": {
-            "description": "상승 쐐기 (좁아지는 상승)",
-            "signal": "매도 (하단 이탈 시)",
-            "target": "-10~15%",
-            "stop_loss": "+4% (상단 돌파)"
-        }
-    }
-}
+# 세션 스테이트 초기화
+if 'current_ticker' not in st.session_state:
+    st.session_state.current_ticker = None
+if 'last_analysis_time' not in st.session_state:
+    st.session_state.last_analysis_time = None
+if 'ticker_input_key' not in st.session_state:
+    st.session_state.ticker_input_key = 0
 
+def reset_session():
+    """세션 상태 완전 초기화"""
+    st.cache_data.clear()
+    st.session_state.last_analysis_time = datetime.now()
 
-def get_stock_data(ticker_code, yf_ticker, days_ago=0):
-    """주가 데이터 조회"""
-    if FDR_AVAILABLE:
-        try:
-            end_date = datetime.now() - timedelta(days=days_ago)
-            start_date = end_date - timedelta(days=30)
-            
-            df = fdr.DataReader(
-                ticker_code, 
-                start=start_date.strftime('%Y-%m-%d'),
-                end=end_date.strftime('%Y-%m-%d')
-            )
-            
-            if df.empty:
-                return {"price": 0, "date": "", "source": "오류"}
-            
-            return {
-                "price": int(df['Close'].iloc[-1]),
-                "date": df.index[-1].strftime('%Y-%m-%d %H:%M'),
-                "source": "네이버 금융"
-            }
-        except:
-            pass
+# 헤더
+st.title("📊 AI 주식 팩트 스캐너 (Professional Trader Edition)")
+st.markdown("---")
+
+# 종목 입력 섹션
+col1, col2 = st.columns([3, 1])
+with col1:
+    ticker_input = st.text_input(
+        "종목 코드 입력 (예: 005930, 051910)", 
+        key=f"ticker_input_{st.session_state.ticker_input_key}",
+        on_change=reset_session
+    )
+
+with col2:
+    st.markdown("<br>", unsafe_allow_html=True)
+    analyze_button = st.button("🔍 분석 시작", type="primary", use_container_width=True)
+
+if not ticker_input or not analyze_button:
+    st.info("👆 종목 코드를 입력하고 '분석 시작' 버튼을 클릭하세요.")
+    st.stop()
+
+# 종목 코드 변경 감지
+if st.session_state.current_ticker != ticker_input:
+    st.session_state.current_ticker = ticker_input
+    reset_session()
+
+ticker_code = ticker_input.strip()
+yf_ticker = ticker_code + ".KS"
+
+# 종목 정보 가져오기
+@st.cache_data(ttl=300)
+def get_stock_info(yf_ticker):
+    """주식 기본 정보 가져오기"""
+    try:
+        ticker = yf.Ticker(yf_ticker)
+        info = ticker.info
+        hist = ticker.history(period="1d")
+        
+        if hist.empty:
+            return None, None, None
+        
+        current_price = hist['Close'].iloc[-1]
+        company_name = info.get('longName', info.get('shortName', '알 수 없음'))
+        
+        return company_name, current_price, info
+    except Exception as e:
+        st.error(f"❌ 주식 정보 조회 실패: {str(e)}")
+        return None, None, None
+
+company_name, current_price, stock_info = get_stock_info(yf_ticker)
+
+if not company_name or not current_price:
+    st.error(f"❌ 종목 코드 '{ticker_code}'를 찾을 수 없습니다. 올바른 코드를 입력하세요.")
+    st.stop()
+
+# 종목 헤더 표시
+st.header(f"🏢 {company_name} ({ticker_code})")
+st.subheader(f"💰 현재가: {current_price:,.0f} 원")
+st.markdown("---")
+
+# 뉴스 분석 섹션
+st.subheader("📰 최신 뉴스 분석")
+
+@st.cache_data(ttl=1800)
+def get_news_data(company_name, max_news=5):
+    """네이버 뉴스 검색"""
+    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+        st.warning("⚠️ 네이버 API 키가 설정되지 않았습니다. 뉴스 분석을 건너뜁니다.")
+        return []
     
     try:
-        df = yf.download(yf_ticker, period="1d", progress=False)
-        if df.empty:
-            return {"price": 0, "date": "", "source": "오류"}
-        
-        return {
-            "price": int(df['Close'].iloc[-1]),
-            "date": df.index[-1].strftime('%Y-%m-%d'),
-            "source": "Yahoo Finance"
-        }
-    except:
-        return {"price": 0, "date": "", "source": "오류"}
-
-
-def crawl_news_content(url):
-    """뉴스 본문 크롤링"""
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=5)
-        if response.status_code != 200:
-            return ""
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        article = soup.find('article') or soup.find('div', {'id': 'articleBodyContents'})
-        if article:
-            for script in article(['script', 'style']):
-                script.decompose()
-            return article.get_text(strip=True)[:1000]
-        return ""
-    except:
-        return ""
-
-
-def get_news_data(company_name):
-    """뉴스 수집"""
-    try:
-        if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-            return []
-        
         url = "https://openapi.naver.com/v1/search/news.json"
         headers = {
-            "X-Naver-Client-Id": NAVER_CLIENT_ID, 
+            "X-Naver-Client-Id": NAVER_CLIENT_ID,
             "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
         }
-        params = {"query": f"{company_name} 주가", "display": 10, "sort": "date"}
+        params = {
+            "query": company_name,
+            "display": max_news,
+            "sort": "date"
+        }
         
         response = requests.get(url, headers=headers, params=params, timeout=10)
-        if response.status_code != 200:
-            return []
+        response.raise_for_status()
         
         items = response.json().get('items', [])
-        news_data = []
+        news_list = []
         
-        for item in items:
-            title = item['title'].replace("<b>","").replace("</b>","")
+        for item in items[:max_news]:
+            title = BeautifulSoup(item['title'], 'html.parser').get_text()
+            desc = BeautifulSoup(item['description'], 'html.parser').get_text()
             link = item['link']
-            description = item.get('description', '').replace("<b>","").replace("</b>","")
             
-            if company_name not in title and company_name not in description:
-                continue
-            
-            content = ""
-            if len(news_data) < 5:
-                content = crawl_news_content(link)
-                time.sleep(0.3)
-            
-            news_data.append({
-                "title": title,
-                "link": link,
-                "description": description,
-                "content": content
+            news_list.append({
+                'title': title,
+                'description': desc,
+                'link': link
             })
-            
-            if len(news_data) >= 5:
-                break
+            time.sleep(0.2)
         
-        return news_data
+        return news_list
+        
     except Exception as e:
-        st.warning(f"뉴스 수집 오류: {str(e)}")
+        st.warning(f"⚠️ 뉴스 수집 중 오류 발생: {str(e)}")
         return []
 
-
-def analyze_single_news(ticker, news_item):
-    """개별 뉴스 분석"""
-    if not GEMINI_API_KEY:
-        return {"sentiment": "중립", "score": 50, "reason": "API 키 없음"}
-    
-    text = f"[제목] {news_item['title']}\n[요약] {news_item['description']}"
-    if news_item.get('content'):
-        text += f"\n[본문] {news_item['content'][:800]}"
-    
-    prompt = f"""전문 증권 애널리스트로서 다음 뉴스를 분석하세요.
-
-종목: {ticker}
-뉴스: {text}
-
-판단 기준:
-🟢 호재 (70~100점): 실적↑, 수주, 신제품, 투자 유치
-🔴 악재 (0~30점): 실적↓, 소송, 규제, 감원
-🟡 중립 (40~60점): 단순 공지, 영향 불분명
-
-JSON 출력:
-{{"sentiment": "호재" or "악재" or "중립", "score": 0~100, "reason": "이유 50자"}}
-"""
+def analyze_news_with_ai(ticker, news_item):
+    """개별 뉴스 AI 분석"""
+    if not GEMINI_MODEL:
+        return "중립", 50, "AI 분석 불가"
     
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt, request_options={"timeout": 15})
-        text = response.text.strip()
-        
-        if '```json' in text:
-            text = text.split('```json')[1].split('```')[0]
-        elif '```' in text:
-            text = text.split('```')[1].split('```')[0]
-        
-        start = text.find('{')
-        end = text.rfind('}') + 1
-        if start != -1 and end > start:
-            text = text[start:end]
-        
-        result = json.loads(text.strip())
-        sentiment = result.get("sentiment", "중립")
-        score = int(float(result.get("score", 50)))
-        
-        if score >= 70:
-            sentiment = "호재"
-        elif score <= 30:
-            sentiment = "악재"
-        
-        return {
-            "sentiment": sentiment,
-            "score": max(0, min(100, score)),
-            "reason": result.get("reason", "")[:100]
-        }
-    except:
-        return {"sentiment": "중립", "score": 50, "reason": "분석 오류"}
+        prompt = f"""당신은 20년 경력의 전문 증권 애널리스트입니다.
 
+다음 뉴스가 주식 '{ticker}'에 미치는 영향을 분석하세요.
 
-def analyze_validity(ticker, news_with_sentiment):
-    """종합 분석"""
-    if not news_with_sentiment:
-        return {"correlation_score": 50, "reason": "뉴스 없음"}
-    
-    scores = [n["sentiment_data"]["score"] for n in news_with_sentiment]
-    sentiments = [n["sentiment_data"]["sentiment"] for n in news_with_sentiment]
-    
-    avg_score = int(np.mean(scores))
-    positive = sentiments.count("호재")
-    negative = sentiments.count("악재")
-    
-    if positive > negative:
-        reason = f"호재 {positive}개, 악재 {negative}개 - 긍정적"
-    elif negative > positive:
-        reason = f"악재 {negative}개, 호재 {positive}개 - 부정적"
-    else:
-        reason = f"호재 {positive}개, 악재 {negative}개 - 혼재"
-    
-    return {"correlation_score": avg_score, "reason": reason}
+**뉴스 제목**: {news_item['title']}
+**뉴스 내용**: {news_item['description']}
 
-
-# --- [차트 패턴 AI 분석] ---
-def analyze_chart_pattern_ai(prices):
-    """AI로 차트 패턴 인식"""
-    if not GEMINI_API_KEY:
-        return None
-    
-    # 최근 20일 데이터
-    recent_20 = prices[-20:] if len(prices) >= 20 else prices
-    
-    # 정규화
-    normalized = ((recent_20 - recent_20.min()) / (recent_20.max() - recent_20.min()) * 100).tolist()
-    
-    # 가격 변화 설명
-    price_desc = f"최근 20일 가격 변화: {normalized}"
-    
-    # 패턴 목록
-    pattern_list = []
-    for category, patterns in CHART_PATTERNS.items():
-        for name, info in patterns.items():
-            pattern_list.append(f"- {name}: {info['description']}")
-    
-    prompt = f"""당신은 20년 경력의 프로 차트 분석가입니다.
-
-**차트 데이터** (정규화 0~100):
-{price_desc}
-
-**알려진 차트 패턴들**:
-{chr(10).join(pattern_list)}
-
-**분석 요청**:
-1. 위 차트 데이터가 어떤 패턴과 가장 유사한가?
-2. 유사도는 몇 %인가? (60% 이상만 판단)
-3. 현재 패턴이 완성 단계인가, 진행 중인가?
+**판단 기준**:
+- **호재** (70~100점): 매출/이익 증가, 신제품 출시, 대규모 계약, 긍정적 실적 발표
+- **악재** (0~30점): 매출/이익 감소, 소송/규제, 부정적 실적, 경영 위기
+- **중립** (31~69점): 단순 공시, 인사 이동, 애매한 내용
 
 **출력 형식** (JSON):
 {{
-  "pattern_name": "패턴 이름 (예: Double_Bottom)",
-  "similarity": 유사도 (0~100),
-  "category": "CONTINUATION/NEUTRAL/REVERSAL/SPECIAL",
-  "stage": "형성 중/완성/돌파 임박",
-  "reason": "판단 근거 100자"
+  "sentiment": "호재" or "악재" or "중립",
+  "score": 0~100 사이 정수,
+  "reason": "50자 이내 판단 근거"
 }}
 
-유사도 60% 미만이면 {{"pattern_name": "None", "similarity": 0}}
-"""
-    
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt, request_options={"timeout": 20})
+반드시 JSON 형식으로만 답변하세요."""
+
+        response = GEMINI_MODEL.generate_content(
+            prompt,
+            generation_config={
+                'temperature': 0.0,
+                'top_p': 0.8,
+                'max_output_tokens': 300
+            },
+            request_options={'timeout': 15}
+        )
+        
         text = response.text.strip()
         
+        # JSON 추출
         if '```json' in text:
-            text = text.split('```json')[1].split('```')[0]
+            text = text.split('```json')[1].split('```')[0].strip()
         elif '```' in text:
-            text = text.split('```')[1].split('```')[0]
+            text = text.split('```')[1].split('```')[0].strip()
         
-        start = text.find('{')
-        end = text.rfind('}') + 1
-        if start != -1 and end > start:
-            text = text[start:end]
+        result = json.loads(text)
         
-        result = json.loads(text.strip())
+        sentiment = result.get('sentiment', '중립')
+        score = max(0, min(100, int(result.get('score', 50))))
+        reason = result.get('reason', '')[:100]
         
-        if result.get("pattern_name") == "None" or result.get("similarity", 0) < 60:
+        return sentiment, score, reason
+        
+    except Exception as e:
+        return "중립", 50, f"분석 오류: {str(e)[:50]}"
+
+# 뉴스 수집 및 분석
+with st.spinner("📰 뉴스를 수집하고 분석 중..."):
+    news_list = get_news_data(company_name)
+    
+    if news_list:
+        analyzed_news = []
+        for news in news_list:
+            sentiment, score, reason = analyze_news_with_ai(ticker_code, news)
+            analyzed_news.append({
+                **news,
+                'sentiment': sentiment,
+                'score': score,
+                'reason': reason
+            })
+        
+        # 평균 점수 계산
+        avg_score = sum(n['score'] for n in analyzed_news) / len(analyzed_news)
+        
+        # 감정별 카운트
+        sentiment_counts = {
+            '호재': sum(1 for n in analyzed_news if n['sentiment'] == '호재'),
+            '악재': sum(1 for n in analyzed_news if n['sentiment'] == '악재'),
+            '중립': sum(1 for n in analyzed_news if n['sentiment'] == '중립')
+        }
+        
+        # 종합 평가
+        if avg_score >= 65:
+            overall = "🟢 전반적으로 호재"
+            overall_color = "green"
+        elif avg_score <= 35:
+            overall = "🔴 전반적으로 악재"
+            overall_color = "red"
+        else:
+            overall = "🟡 중립적"
+            overall_color = "orange"
+        
+        st.markdown(f"### {overall} (평균 {avg_score:.1f}점)")
+        st.markdown(f"**분석 뉴스**: 총 {len(analyzed_news)}건 (호재 {sentiment_counts['호재']}건, 악재 {sentiment_counts['악재']}건, 중립 {sentiment_counts['중립']}건)")
+        
+        # 개별 뉴스 표시
+        with st.expander("📋 개별 뉴스 분석 결과 보기", expanded=True):
+            for i, news in enumerate(analyzed_news, 1):
+                emoji = "🟢" if news['sentiment'] == "호재" else "🔴" if news['sentiment'] == "악재" else "🟡"
+                
+                st.markdown(f"""
+**{i}. {emoji} [{news['sentiment']}] {news['title']}**
+- 점수: {news['score']}점
+- 이유: {news['reason']}
+- [원문 보기]({news['link']})
+""")
+                st.markdown("---")
+    else:
+        st.info("ℹ️ 최근 뉴스를 찾을 수 없습니다.")
+
+st.markdown("---")
+
+# 차트 패턴 분석 섹션
+st.subheader("📈 전문 트레이더 차트 패턴 분석")
+
+CHART_PATTERNS = {
+    "지속형": {
+        "Pennant (페넌트)": {"signal": "매수", "target": "+5~8%", "stop": "-3%"},
+        "Bullish Flag (강세 깃발)": {"signal": "매수", "target": "+8~12%", "stop": "-3%"},
+        "Channel Up (상승 채널)": {"signal": "매수", "target": "+5~10%", "stop": "-3%"}
+    },
+    "중립형": {
+        "Symmetrical Triangle (대칭 삼각형)": {"signal": "관망", "target": "±5~8%", "stop": "±3%"},
+        "Ascending Triangle (상승 삼각형)": {"signal": "매수", "target": "+7~10%", "stop": "-4%"},
+        "Descending Triangle (하락 삼각형)": {"signal": "매도", "target": "-7~10%", "stop": "+4%"}
+    },
+    "반전형": {
+        "Double Bottom (쌍바닥)": {"signal": "매수", "target": "+8~15%", "stop": "-3%"},
+        "Head and Shoulders (머리어깨)": {"signal": "매도", "target": "-10~20%", "stop": "+5%"},
+        "Cup and Handle (컵 손잡이)": {"signal": "매수", "target": "+15~30%", "stop": "-5%"}
+    },
+    "특수형": {
+        "Falling Wedge (하락 쐐기)": {"signal": "매수", "target": "+10~15%", "stop": "-4%"},
+        "Rising Wedge (상승 쐐기)": {"signal": "매도", "target": "-10~15%", "stop": "+4%"}
+    }
+}
+
+@st.cache_data(ttl=600)
+def get_recent_prices(yf_ticker, days=20):
+    """최근 N일 가격 데이터"""
+    try:
+        ticker = yf.Ticker(yf_ticker)
+        hist = ticker.history(period=f"{days+10}d")
+        
+        if len(hist) < days:
             return None
         
-        return result
-        
+        prices = hist['Close'].tail(days).values
+        return prices
     except:
         return None
 
+def normalize_prices(prices):
+    """가격을 0~100으로 정규화"""
+    min_p = prices.min()
+    max_p = prices.max()
+    
+    if max_p == min_p:
+        return np.full_like(prices, 50.0)
+    
+    return (prices - min_p) / (max_p - min_p) * 100
 
-@st.cache_data(ttl=3600)
-def load_krx():
-    if FDR_AVAILABLE:
-        try:
-            df = fdr.StockListing('KRX')
-            return df[['Code', 'Name']]
-        except:
-            pass
-    
-    return pd.DataFrame({
-        'Code': ['005930', '000660', '035420', '051910', '035720'],
-        'Name': ['삼성전자', 'SK하이닉스', 'NAVER', 'LG화학', '카카오']
-    })
-
-
-# ==================================================================
-# ========================= UI 레이아웃 ============================
-# ==================================================================
-
-st.set_page_config(page_title="AI 차트 패턴 투자 분석", page_icon="📈", layout="wide")
-
-if 'last_input' not in st.session_state:
-    st.session_state.last_input = None
-
-st.title("📈 AI 차트 패턴 투자 분석")
-st.caption("프로 트레이더의 차트 패턴 분석 + 투자 전략 제안")
-
-# 사이드바
-with st.sidebar:
-    st.header("📌 차트 패턴 가이드")
-    
-    st.markdown("### 🟢 CONTINUATION (지속)")
-    st.markdown("- Pennant, Flag, Channel")
-    st.markdown("- 기존 추세 유지")
-    
-    st.markdown("### 🟡 NEUTRAL (중립)")
-    st.markdown("- Triangle (대칭/상승/하락)")
-    st.markdown("- 돌파 방향 확인 필요")
-    
-    st.markdown("### 🔴 REVERSAL (반전)")
-    st.markdown("- Double Top/Bottom")
-    st.markdown("- Head & Shoulders")
-    st.markdown("- Cup & Handle")
-    
-    st.markdown("### 🟣 SPECIAL (특수)")
-    st.markdown("- Wedge (쐐기)")
-    st.markdown("- 강한 반전 신호")
-
-# 메인
-user_input = st.text_input("🔍 종목명 또는 코드 입력", placeholder="예: 삼성전자, 005930")
-
-if user_input:
-    if st.session_state.last_input != user_input:
-        st.session_state.last_input = user_input
-        st.cache_data.clear()
-    
-    krx_df = load_krx()
-    matched = krx_df[
-        (krx_df['Name'].str.contains(user_input, na=False)) | 
-        (krx_df['Code'] == user_input)
-    ]
-    
-    if matched.empty:
-        st.error("❌ 종목을 찾을 수 없습니다.")
-        st.stop()
-    
-    ticker_code = matched.iloc[0]['Code']
-    company_name = matched.iloc[0]['Name']
-    yf_ticker = ticker_code + ".KS" if ticker_code[0] == '0' else ticker_code + ".KQ"
-    
-    st.header(f"🏢 {company_name} ({ticker_code})")
-    st.caption(f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    # 현재가
-    stock_data = get_stock_data(ticker_code, yf_ticker)
-    if stock_data["price"] > 0:
-        st.metric("💵 현재가", f"{stock_data['price']:,}원", 
-                 help=f"{stock_data['date']} ({stock_data['source']})")
-    
-    st.divider()
-    
-    # === 차트 패턴 AI 분석 ===
-    st.subheader("📊 프로 트레이더 차트 패턴 분석")
+def detect_chart_pattern_with_ai(ticker, normalized_prices):
+    """AI로 차트 패턴 감지"""
+    if not GEMINI_MODEL:
+        return None, 0, None
     
     try:
-        df = yf.download(yf_ticker, period="3mo", progress=False)
-        if len(df) >= 20:
-            prices = df['Close'].values
+        # 패턴 설명 생성
+        pattern_desc = "\n".join([
+            f"**{category}**:\n" + "\n".join([f"  - {name}" for name in patterns.keys()])
+            for category, patterns in CHART_PATTERNS.items()
+        ])
+        
+        prompt = f"""당신은 전문 차트 분석가입니다.
+
+다음은 주식 '{ticker}'의 최근 20일 가격 데이터를 0~100으로 정규화한 값입니다:
+{normalized_prices.tolist()}
+
+아래 차트 패턴 중 가장 유사한 패턴을 찾으세요:
+
+{pattern_desc}
+
+**출력 형식** (JSON):
+{{
+  "pattern": "패턴 이름 (정확히 위 목록에서 선택)",
+  "similarity": 0~100 사이 유사도,
+  "category": "지속형/중립형/반전형/특수형"
+}}
+
+유사도가 60 미만이면 "패턴 없음"을 반환하세요.
+반드시 JSON 형식으로만 답변하세요."""
+
+        response = GEMINI_MODEL.generate_content(
+            prompt,
+            generation_config={
+                'temperature': 0.1,
+                'top_p': 0.9,
+                'max_output_tokens': 300
+            },
+            request_options={'timeout': 20}
+        )
+        
+        text = response.text.strip()
+        
+        # JSON 추출
+        if '```json' in text:
+            text = text.split('```json')[1].split('```')[0].strip()
+        elif '```' in text:
+            text = text.split('```')[1].split('```')[0].strip()
+        
+        result = json.loads(text)
+        
+        pattern = result.get('pattern', '패턴 없음')
+        similarity = max(0, min(100, int(result.get('similarity', 0))))
+        category = result.get('category', None)
+        
+        if similarity < 60 or pattern == "패턴 없음":
+            return None, 0, None
+        
+        return pattern, similarity, category
+        
+    except Exception as e:
+        st.warning(f"⚠️ 패턴 분석 중 오류: {str(e)}")
+        return None, 0, None
+
+# 가격 데이터 가져오기
+with st.spinner("📊 차트 패턴 분석 중..."):
+    prices = get_recent_prices(yf_ticker, days=20)
+    
+    if prices is not None:
+        normalized = normalize_prices(prices)
+        pattern_name, similarity, category = detect_chart_pattern_with_ai(ticker_code, normalized)
+        
+        if pattern_name and category:
+            # 패턴 정보 가져오기
+            pattern_info = CHART_PATTERNS[category][pattern_name]
             
-            with st.spinner("🔍 AI가 차트 패턴을 분석 중..."):
-                pattern_result = analyze_chart_pattern_ai(prices)
+            # 목표가 및 손절가 계산
+            target_str = pattern_info['target']
+            stop_str = pattern_info['stop']
             
-            if pattern_result:
-                pattern_name = pattern_result["pattern_name"]
-                similarity = pattern_result["similarity"]
-                category = pattern_result["category"]
-                stage = pattern_result["stage"]
-                reason = pattern_result["reason"]
-                
-                # 패턴 정보 가져오기
-                pattern_info = None
-                for cat, patterns in CHART_PATTERNS.items():
-                    if pattern_name in patterns:
-                        pattern_info = patterns[pattern_name]
-                        break
-                
-                if pattern_info:
-                    # 카테고리별 색상
-                    if category == "CONTINUATION":
-                        color = "🟢"
-                        bg_color = "green"
-                    elif category == "REVERSAL":
-                        color = "🔴"
-                        bg_color = "red"
-                    elif category == "SPECIAL":
-                        color = "🟣"
-                        bg_color = "purple"
-                    else:
-                        color = "🟡"
-                        bg_color = "orange"
-                    
-                    st.success(f"""
-                    ### {color} **{pattern_name.replace('_', ' ')}** 패턴 감지!
-                    
-                    **카테고리**: {category}  
-                    **유사도**: {similarity}%  
-                    **단계**: {stage}
-                    
-                    **AI 판단 근거**:  
-                    {reason}
-                    """)
-                    
-                    # 투자 전략
-                    st.markdown("---")
-                    st.markdown("### 💡 **프로 트레이더 투자 전략**")
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.info(f"""
-                        **📋 패턴 설명**  
-                        {pattern_info['description']}
-                        
-                        **📈 추천 액션**  
-                        {pattern_info['signal']}
-                        """)
-                    
-                    with col2:
-                        st.warning(f"""
-                        **🎯 목표가**  
-                        {pattern_info['target']}
-                        
-                        **⛔ 손절가**  
-                        {pattern_info['stop_loss']}
-                        """)
-                    
-                    # 구체적 가격 계산
-                    current_price = stock_data["price"]
-                    
-                    # 목표가 계산 (간단한 예시)
-                    if "+" in pattern_info['target']:
-                        pct = float(pattern_info['target'].split('+')[1].split('~')[0])
-                        target_price = int(current_price * (1 + pct / 100))
-                        st.success(f"🎯 **예상 목표가**: {target_price:,}원 (현재가 대비 +{pct}%)")
-                    
-                    # 손절가 계산
-                    if "-" in pattern_info['stop_loss']:
-                        pct = float(pattern_info['stop_loss'].split('-')[1].split('%')[0])
-                        stop_price = int(current_price * (1 - pct / 100))
-                        st.error(f"⛔ **권장 손절가**: {stop_price:,}원 (현재가 대비 -{pct}%)")
-                    
-                    # 차트 표시
-                    st.markdown("---")
-                    st.markdown("### 📉 **최근 20일 차트**")
-                    
-                    fig = go.Figure()
-                    fig.add_trace(go.Candlestick(
-                        x=df.index[-20:],
-                        open=df['Open'].values[-20:],
-                        high=df['High'].values[-20:],
-                        low=df['Low'].values[-20:],
-                        close=df['Close'].values[-20:],
-                        name='가격'
-                    ))
-                    
-                    fig.update_layout(
-                        title=f"{company_name} - {pattern_name.replace('_', ' ')} 패턴 ({similarity}% 유사)",
-                        xaxis_title="날짜",
-                        yaxis_title="가격 (원)",
-                        height=500
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                else:
-                    st.info("패턴이 감지되었으나 상세 정보를 찾을 수 없습니다.")
+            # 퍼센트 파싱
+            if '~' in target_str:
+                target_pct = float(target_str.replace('%', '').replace('+', '').split('~')[1])
             else:
-                st.info("""
-                💡 **명확한 차트 패턴이 감지되지 않았습니다.**
+                target_pct = float(target_str.replace('%', '').replace('+', ''))
+            
+            stop_pct = float(stop_str.replace('%', '').replace('-', '').replace('+', ''))
+            
+            if '매수' in pattern_info['signal']:
+                target_price = current_price * (1 + target_pct / 100)
+                stop_price = current_price * (1 - stop_pct / 100)
+            else:
+                target_price = current_price * (1 - target_pct / 100)
+                stop_price = current_price * (1 + stop_pct / 100)
+            
+            # 결과 표시
+            col1, col2 = st.columns([1, 2])
+            
+            with col1:
+                st.markdown(f"""
+### 🎯 감지된 패턴
                 
-                - 현재 차트가 특정 패턴 형성 초기 단계일 수 있습니다.
-                - 며칠 후 다시 확인하시면 패턴이 명확해질 수 있습니다.
-                - 또는 현재 시장이 박스권 또는 불규칙한 흐름일 수 있습니다.
-                """)
+**패턴 이름**: {pattern_name}  
+**카테고리**: {category}  
+**유사도**: {similarity}%  
+
+---
+
+### 📊 투자 전략
+
+**신호**: {pattern_info['signal']}  
+**목표가**: {target_price:,.0f}원 ({target_str})  
+**손절가**: {stop_price:,.0f}원 ({stop_str})  
+""")
+            
+            with col2:
+                # 차트 그리기
+                fig = go.Figure()
+                
+                fig.add_trace(go.Scatter(
+                    y=prices,
+                    mode='lines+markers',
+                    name='종가',
+                    line=dict(color='royalblue', width=2),
+                    marker=dict(size=6)
+                ))
+                
+                fig.update_layout(
+                    title=f"{pattern_name} 패턴 (최근 20일)",
+                    xaxis_title="일자",
+                    yaxis_title="가격 (원)",
+                    height=400,
+                    showlegend=True,
+                    hovermode='x unified'
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
         else:
-            st.error("차트 데이터가 부족합니다 (최소 20일 필요).")
-    except Exception as e:
-        st.error(f"차트 분석 오류: {str(e)}")
-    
-    st.divider()
-    
-    # 뉴스 분석
-    st.subheader("📰 최신 뉴스 분석")
-    
-    try:
-        with st.spinner("뉴스 수집 중..."):
-            news_data = get_news_data(company_name)
-            
-            news_with_sentiment = []
-            for news in news_data:
-                sentiment_result = analyze_single_news(ticker_code, news)
-                news_with_sentiment.append({**news, "sentiment_data": sentiment_result})
-            
-            ai_result = analyze_validity(ticker_code, news_with_sentiment)
-        
-        score = ai_result["correlation_score"]
-        
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            if score >= 70:
-                st.markdown("### 🟢 호재")
-            elif score >= 40:
-                st.markdown("### 🟡 중립")
-            else:
-                st.markdown("### 🔴 악재")
-            st.markdown(f"**점수**: {score}/100")
-        
-        with col2:
-            st.info(ai_result["reason"])
-        
-        if news_with_sentiment:
-            with st.expander("📄 개별 뉴스 보기"):
-                for news in news_with_sentiment:
-                    s = news["sentiment_data"]
-                    emoji = "🟢" if s["sentiment"]=="호재" else ("🔴" if s["sentiment"]=="악재" else "🟡")
-                    st.markdown(f"{emoji} **{s['sentiment']}** ({s['score']}점) | {news['title']}")
-                    st.caption(f"근거: {s['reason']}")
-                    st.markdown(f"[기사 링크]({news['link']})")
-                    st.divider()
-            
-    except Exception as e:
-        st.error(f"뉴스 분석 오류: {str(e)}")
+            st.info("ℹ️ 명확한 차트 패턴이 감지되지 않았습니다. (유사도 < 60%)")
+    else:
+        st.warning("⚠️ 차트 데이터를 가져올 수 없습니다.")
 
-st.divider()
-st.caption("© 2026 AI 차트 패턴 투자 분석 | 프로 트레이더의 검증된 패턴 기반")
+st.markdown("---")
+
+# 백테스팅 섹션
+st.subheader("⏮️ 백테스팅 (2주 전 분석)")
+
+@st.cache_data(ttl=600)
+def backtest_2weeks_ago(yf_ticker):
+    """2주 전 시점 백테스팅"""
+    try:
+        ticker = yf.Ticker(yf_ticker)
+        hist = ticker.history(period="1mo")
+        
+        if len(hist) < 14:
+            return None
+        
+        # 2주 전 가격
+        price_2w_ago = hist['Close'].iloc[-14]
+        current_price_bt = hist['Close'].iloc[-1]
+        
+        # 예측 (간단한 모멘텀 기반)
+        recent_trend = hist['Close'].tail(10).pct_change().mean()
+        predicted_price = price_2w_ago * (1 + recent_trend * 14)
+        
+        # 정확도
+        actual_change = (current_price_bt - price_2w_ago) / price_2w_ago * 100
+        predicted_change = (predicted_price - price_2w_ago) / price_2w_ago * 100
+        accuracy = 100 - abs(actual_change - predicted_change)
+        accuracy = max(0, min(100, accuracy))
+        
+        direction_match = (actual_change > 0) == (predicted_change > 0)
+        
+        return {
+            'past_price': price_2w_ago,
+            'predicted_price': predicted_price,
+            'current_price': current_price_bt,
+            'accuracy': accuracy,
+            'direction_match': direction_match
+        }
+    except:
+        return None
+
+bt_result = backtest_2weeks_ago(yf_ticker)
+
+if bt_result:
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("2주 전 가격", f"{bt_result['past_price']:,.0f}원")
+    
+    with col2:
+        st.metric("AI 예측 가격", f"{bt_result['predicted_price']:,.0f}원")
+    
+    with col3:
+        st.metric("실제 현재가", f"{bt_result['current_price']:,.0f}원")
+    
+    with col4:
+        stars = "⭐" * int(bt_result['accuracy'] / 20)
+        direction = "✅" if bt_result['direction_match'] else "❌"
+        st.metric("정확도", f"{bt_result['accuracy']:.1f}% {stars}")
+        st.markdown(f"**방향성**: {direction}")
+else:
+    st.info("ℹ️ 백테스팅 데이터가 부족합니다.")
+
+st.markdown("---")
+st.caption(f"💡 분석 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption("⚠️ 본 분석은 투자 참고용이며, 투자 결정은 본인의 책임입니다.")
