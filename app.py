@@ -181,11 +181,15 @@ def calculate_stock_score(hist, current_price):
         if avg_volume > 0:
             volume_ratio = current_volume / avg_volume
             if volume_ratio >= 2.0:
-                volume_score = 85
+                volume_score = 90
             elif volume_ratio >= 1.5:
+                volume_score = 75
+            elif volume_ratio >= 1.2:
                 volume_score = 60
+            elif volume_ratio >= 0.8:
+                volume_score = 45
             else:
-                volume_score = 30
+                volume_score = 25
         else:
             volume_ratio = 0
             volume_score = 50
@@ -208,12 +212,16 @@ def calculate_stock_score(hist, current_price):
         
         satisfied = sum([cond1, cond2, cond3, cond4])
         
-        if satisfied >= 3:
-            module3_score = 85
-        elif satisfied >= 2:
+        if satisfied == 4:
+            module3_score = 100
+        elif satisfied == 3:
+            module3_score = 80
+        elif satisfied == 2:
             module3_score = 60
+        elif satisfied == 1:
+            module3_score = 40
         else:
-            module3_score = 35
+            module3_score = 20
         
         # 모듈 4: 리스크
         sl_methods = {
@@ -750,13 +758,19 @@ if avg_volume > 0:
     
     if volume_ratio >= 2.0:
         breakout = "높음 🟢"
-        volume_score = 85
+        volume_score = 90
     elif volume_ratio >= 1.5:
+        breakout = "중상 🟢"
+        volume_score = 75
+    elif volume_ratio >= 1.2:
         breakout = "중간 🟡"
         volume_score = 60
+    elif volume_ratio >= 0.8:
+        breakout = "보통 🟡"
+        volume_score = 45
     else:
         breakout = "낮음 🔴"
-        volume_score = 30
+        volume_score = 25
 else:
     volume_ratio = 0
     breakout = "부족"
@@ -771,21 +785,25 @@ cond2 = current_price >= high_20d
 
 if len(hist) >= 2:
     pct_chg = ((current_price - float(hist['Close'].iloc[-2])) / float(hist['Close'].iloc[-2])) * 100
-    cond3 = 5 <= pct_chg <= 15
+    cond3 = -2 <= pct_chg <= 15  # -2%~+15% 범위로 완화
 else:
     pct_chg = 0
     cond3 = False
 
-cond4 = volume_ratio >= 2.0
+cond4 = volume_ratio >= 1.5  # 1.5배로 완화
 
 satisfied = sum([cond1, cond2, cond3, cond4])
 
 if satisfied == 4:
-    module3_score = 95
+    module3_score = 100
 elif satisfied == 3:
-    module3_score = 70
-else:
+    module3_score = 80
+elif satisfied == 2:
+    module3_score = 60
+elif satisfied == 1:
     module3_score = 40
+else:
+    module3_score = 20
 
 # 모듈 4
 sl_methods = {
@@ -882,6 +900,12 @@ st.subheader("📊 모듈 2: 거래량 & 공급 검증")
 st.info("""
 **📊 모듈 2란?**  
 거래량을 분석하여 가격 움직임의 신뢰도를 검증합니다.
+
+- **거래량 급증**: 평균 대비 2배 이상 = 강한 매수/매도 세력 유입
+- **거래량 감소**: 조정 시 거래량 감소 = 건전한 조정 (긍정)
+- **유동성 검증**: 일평균 거래대금이 충분한지 확인
+
+**점수**: 2.0배↑=90점 | 1.5~2.0배=75점 | 1.2~1.5배=60점 | 0.8~1.2배=45점 | 0.8배↓=25점
 """)
 
 col1, col2 = st.columns(2)
@@ -918,7 +942,14 @@ st.subheader("🎯 모듈 3: 매수 신호")
 
 st.info("""
 **🎯 모듈 3이란?**  
-4가지 핵심 조건을 충족해야 강력한 매수 신호로 판단합니다.
+4가지 핵심 조건을 충족하면 강력한 매수 신호로 판단합니다.
+
+1. **120일선 상회**: 중장기 상승 추세 확인
+2. **20일 신고가**: 단기 모멘텀 확보
+3. **최적 변동폭 (-2~15%)**: 과열되지 않은 건전한 상승
+4. **거래량 급증 (1.5배↑)**: 강한 매수 세력 유입
+
+**점수**: 4개=100점 | 3개=80점 | 2개=60점 | 1개=40점 | 0개=20점
 """)
 
 col1, col2, col3, col4 = st.columns(4)
@@ -1016,6 +1047,15 @@ st.markdown("---")
 # 최종 평가
 st.header("🏆 최종 종합 평가")
 
+# 평가 기준 표시
+st.info("""
+**📊 평가 기준**
+
+- 🟢 **75점 이상**: 강력 매수 추천 → 모든 지표가 긍정적, 적극적 매수 고려
+- 🟡 **55~74점**: 신중 매수 → 일부 지표가 긍정적, 리스크 관리 필수
+- 🔴 **55점 미만**: 매수 부적합 → 현재 매수 시점 아님, 관망 권장
+""")
+
 fig_final = go.Figure(go.Indicator(
     mode="gauge+number+delta",
     value=final_score,
@@ -1039,10 +1079,13 @@ st.plotly_chart(fig_final, use_container_width=True)
 
 if final_score >= 75:
     st.success("### 🟢 강력 매수 추천")
+    st.markdown("**모든 지표가 긍정적입니다. 적극적인 매수를 고려하세요.**")
 elif final_score >= 55:
     st.warning("### 🟡 신중 매수")
+    st.markdown("**일부 지표가 긍정적입니다. 리스크 관리를 철저히 하세요.**")
 else:
     st.error("### 🔴 매수 부적합")
+    st.markdown("**현재 매수 시점이 아닙니다. 관망을 권장합니다.**")
 
 # 기여도
 st.markdown("### 📊 모듈별 기여도")
