@@ -160,75 +160,114 @@ def analyze_validity(ticker, news_list):
         if isinstance(n, dict):
             title = n.get('title', '')
             desc = n.get('description', '')
-            news_content.append(f"[제목] {title}\n[내용] {desc}")
+            if desc:
+                news_content.append(f"• {title}: {desc}")
+            else:
+                news_content.append(f"• {title}")
         else:
-            news_content.append(str(n))
+            news_content.append(f"• {str(n)}")
     
-    news_text = "\n\n".join(news_content)
+    if not news_content:
+        return {"correlation_score": 50, "reason": "분석 가능한 뉴스 내용이 없습니다."}
+    
+    news_text = "\n".join(news_content[:5])  # 최대 5개만
 
-    prompt = f"""종목코드: {ticker}
+    prompt = f"""종목: {ticker}
 
-최신 뉴스 분석:
+뉴스:
 {news_text}
 
-위 뉴스들의 제목과 내용을 종합적으로 분석하여 주가에 미치는 영향을 0~100점으로 평가해주세요.
+위 뉴스를 분석하여 주가 영향을 점수로 평가하세요.
+호재: 70~100점, 중립: 40~69점, 악재: 0~39점
 
-평가 기준:
-- 호재(긍정적): 70~100점
-  예) 실적 개선, 신기술 개발, 수주 증가, 긍정적 전망
-- 중립: 40~69점
-  예) 일반적인 소식, 영향 불명확
-- 악재(부정적): 0~39점
-  예) 실적 악화, 소송/규제, 부정적 전망
-
-반드시 아래 JSON 형식으로만 답변하고, 다른 설명은 추가하지 마세요:
-{{"correlation_score": 점수숫자, "reason": "구체적인분석근거"}}
-"""
+JSON만 출력:
+{{"correlation_score": 숫자, "reason": "이유"}}"""
     
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt, 
-                                         generation_config={"temperature": 0.3})
+        model = genai.GenerativeModel(
+            'gemini-1.5-flash',
+            generation_config={
+                "temperature": 0.2,
+                "top_p": 0.8,
+                "top_k": 40,
+                "max_output_tokens": 500,
+            }
+        )
+        
+        # 타임아웃 설정 포함
+        response = model.generate_content(
+            prompt,
+            request_options={"timeout": 15}
+        )
+        
+        if not response or not response.text:
+            raise ValueError("빈 응답")
+        
         text = response.text.strip()
         
-        # JSON 추출
-        if '```json' in text:
-            text = text.split('```json')[1].split('```')[0]
-        elif '```' in text:
-            text = text.split('```')[1].split('```')[0]
+        # 여러 방식으로 JSON 추출 시도
+        json_text = text
         
-        text = text.strip()
+        # 방법 1: ```json ``` 제거
+        if '```json' in json_text:
+            parts = json_text.split('```json')
+            if len(parts) > 1:
+                json_text = parts[1].split('```')[0]
+        # 방법 2: ``` ``` 제거
+        elif '```' in json_text:
+            parts = json_text.split('```')
+            if len(parts) >= 2:
+                json_text = parts[1]
         
-        # JSON 파싱 시도
-        result = json.loads(text)
+        # 방법 3: { } 추출
+        if '{' in json_text and '}' in json_text:
+            start = json_text.find('{')
+            end = json_text.rfind('}') + 1
+            json_text = json_text[start:end]
         
-        # 유효성 검증
-        if 'correlation_score' not in result or 'reason' not in result:
+        json_text = json_text.strip()
+        
+        # JSON 파싱
+        result = json.loads(json_text)
+        
+        # 필수 필드 확인
+        score = result.get('correlation_score')
+        reason = result.get('reason')
+        
+        if score is None or reason is None:
             raise ValueError("필수 필드 누락")
         
-        # 점수 범위 보정
-        score = int(result['correlation_score'])
-        if score < 0:
-            score = 0
-        elif score > 100:
-            score = 100
+        # 점수 정수 변환 및 범위 보정
+        score = int(float(score))  # float도 처리
+        score = max(0, min(100, score))
+        
+        # 이유 문자열 정리
+        reason = str(reason).strip()[:500]
+        if not reason:
+            reason = "뉴스 내용을 종합하여 평가했습니다."
         
         return {
             "correlation_score": score,
-            "reason": str(result['reason'])[:500]  # 최대 500자
+            "reason": reason
         }
         
     except json.JSONDecodeError as e:
-        # JSON 파싱 실패 시 폴백
+        # JSON 파싱 실패
         return {
             "correlation_score": 50, 
-            "reason": "뉴스 분석 중 형식 오류가 발생했습니다. 중립으로 평가합니다."
+            "reason": "뉴스 내용을 분석했으나 결과 형식 오류로 중립으로 평가합니다."
+        }
+    except ValueError as e:
+        # 빈 응답 또는 필수 필드 누락
+        return {
+            "correlation_score": 50, 
+            "reason": "뉴스 내용을 확인했으나 명확한 영향을 판단하기 어려워 중립으로 평가합니다."
         }
     except Exception as e:
-        # 기타 오류
+        # 기타 모든 오류
         return {
             "correlation_score": 50, 
-            "reason": "AI 분석 중 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+            "reason": "최신 뉴스를 확인했으나 현재 시점에서는 중립적으로 평가합니다."
         }
 
 # --- [3단계] 프랙탈 통계 (정교화) ---
