@@ -42,81 +42,25 @@ if GEMINI_API_KEY:
 else:
     GEMINI_MODEL = None
 
-# 주요 한국 주식 종목 매핑 (종목명 → 코드)
+# 주요 한국 주식 종목 매핑
 STOCK_NAME_TO_CODE = {
-    "삼성전자": "005930",
-    "sk하이닉스": "000660",
-    "삼성바이오로직스": "207940",
-    "현대차": "005380",
-    "셀트리온": "068270",
-    "카카오": "035720",
-    "naver": "035420",
-    "네이버": "035420",
-    "lg화학": "051910",
-    "lg전자": "066570",
-    "현대모비스": "012330",
-    "삼성물산": "028260",
-    "포스코홀딩스": "005490",
-    "kb금융": "105560",
-    "신한지주": "055550",
-    "삼성sdi": "006400",
-    "기아": "000270",
-    "하나금융지주": "086790",
-    "sk이노베이션": "096770",
-    "lg생활건강": "051900",
-    "삼성생명": "032830",
-    "현대중공업": "009540",
-    "sk텔레콤": "017670",
-    "삼성화재": "000810",
-    "한국전력": "015760",
-    "kt": "030200",
-    "포스코인터내셔널": "047050",
-    "엔씨소프트": "036570",
-    "삼성엔지니어링": "028050",
-    "카카오뱅크": "323410",
-    "lg": "003550",
-    "cj": "001040",
-    "현대건설": "000720",
-    "sk": "034730",
-    "롯데케미칼": "011170",
-    "삼성전기": "009150",
-    "한화솔루션": "009830",
-    "고려아연": "010130",
-    "대한항공": "003490",
-    "sk바이오팜": "326030",
-    "두산에너빌리티": "034020",
-    "카카오게임즈": "293490",
-    "lg이노텍": "011070",
-    "크래프톤": "259960",
-    "삼성중공업": "010140",
-    "코웨이": "021240",
-    "한미반도체": "042700",
-    "키움증권": "039490",
-    "미래에셋증권": "006800",
-    "하이브": "352820",
-    "삼성바이오에피스": "207940",
-    "sk스퀘어": "402340",
-    "제일기획": "030000",
-    "한국조선해양": "009540",
-    "lg유플러스": "032640",
-    "현대글로비스": "086280",
-    "두산밥캣": "241560",
-    "한화": "000880",
-    "아모레퍼시픽": "090430",
-    "gs건설": "006360",
-    "호텔신라": "008770",
-    "하이닉스": "000660",
-    "셀트리온헬스케어": "091990",
-    "셀트리온제약": "068760",
-    "에코프로": "086520",
-    "에코프로비엠": "247540",
-    "포스코케미칼": "003670",
-    "lg디스플레이": "034220",
-    "한국타이어": "161390",
-    "넷마블": "251270",
-    "쿠팡": "CPNG",
-    "카카오페이": "377300",
-    "카카오엔터": "035760"
+    "삼성전자": "005930", "sk하이닉스": "000660", "삼성바이오로직스": "207940",
+    "현대차": "005380", "셀트리온": "068270", "카카오": "035720",
+    "naver": "035420", "네이버": "035420", "lg화학": "051910",
+    "lg전자": "066570", "현대모비스": "012330", "삼성물산": "028260",
+    "포스코홀딩스": "005490", "kb금융": "105560", "신한지주": "055550",
+    "삼성sdi": "006400", "기아": "000270", "하나금융지주": "086790",
+    "sk이노베이션": "096770", "lg생활건강": "051900", "삼성생명": "032830",
+    "현대중공업": "009540", "sk텔레콤": "017670", "삼성화재": "000810",
+    "한국전력": "015760", "kt": "030200", "포스코인터내셔널": "047050",
+    "엔씨소프트": "036570", "삼성엔지니어링": "028050", "카카오뱅크": "323410",
+    "lg": "003550", "cj": "001040", "현대건설": "000720", "sk": "034730",
+    "롯데케미칼": "011170", "삼성전기": "009150", "한화솔루션": "009830",
+    "고려아연": "010130", "대한항공": "003490", "sk바이오팜": "326030",
+    "두산에너빌리티": "034020", "카카오게임즈": "293490", "lg이노텍": "011070",
+    "크래프톤": "259960", "삼성중공업": "010140", "코웨이": "021240",
+    "한미반도체": "042700", "키움증권": "039490", "미래에셋증권": "006800",
+    "하이브": "352820", "sk스퀘어": "402340", "하이닉스": "000660"
 }
 
 # 세션 스테이트 초기화
@@ -131,25 +75,17 @@ def reset_session():
     st.session_state.last_analysis_time = datetime.now()
 
 def parse_ticker_input(user_input):
-    """
-    사용자 입력을 종목 코드로 변환
-    - 숫자만 있으면 코드로 간주
-    - 한글/영문이 있으면 종목명으로 간주하여 코드 검색
-    """
+    """사용자 입력을 종목 코드로 변환"""
     user_input = user_input.strip().lower()
     
-    # 숫자만 있으면 종목 코드로 간주
     if user_input.isdigit():
         return user_input, None
     
-    # 종목명 매핑에서 검색
     if user_input in STOCK_NAME_TO_CODE:
         code = STOCK_NAME_TO_CODE[user_input]
-        # 종목명 반환 (대문자 변환)
         name = next((k for k, v in STOCK_NAME_TO_CODE.items() if v == code), None)
         return code, name.upper() if name else None
     
-    # 매핑에 없으면 그대로 반환 (사용자가 정확한 코드 입력했을 수 있음)
     return user_input, None
 
 # 헤더
@@ -171,36 +107,27 @@ with col2:
 
 if not ticker_input or not analyze_button:
     st.info("👆 종목 코드 또는 이름을 입력하고 '분석 시작' 버튼을 클릭하세요.")
-    st.markdown("""
-### 💡 사용 가능한 입력 예시:
-- **종목 코드**: `005930` (삼성전자), `035720` (카카오), `051910` (LG화학)
-- **종목 이름**: `삼성전자`, `카카오`, `LG화학`, `네이버`, `SK하이닉스`
-""")
     st.stop()
 
 # 종목 코드 파싱
 ticker_code, parsed_name = parse_ticker_input(ticker_input)
 
-# 종목 코드 변경 감지
 if st.session_state.current_ticker != ticker_code:
     st.session_state.current_ticker = ticker_code
     reset_session()
 
-# yfinance 티커 형식 생성 (한국 주식은 .KS, 미국 주식은 그대로)
 if ticker_code.isdigit():
     yf_ticker = ticker_code + ".KS"
 else:
-    yf_ticker = ticker_code  # 미국 주식 (예: AAPL, CPNG)
+    yf_ticker = ticker_code
 
-# 종목 정보 가져오기 (재시도 로직 추가)
+# 종목 정보 가져오기
 @st.cache_data(ttl=300, show_spinner=False)
 def get_stock_info(yf_ticker, max_retries=3):
-    """주식 기본 정보 가져오기 (재시도 포함)"""
+    """주식 기본 정보 가져오기"""
     for attempt in range(max_retries):
         try:
             ticker = yf.Ticker(yf_ticker)
-            
-            # 먼저 history로 가격 확인
             hist = ticker.history(period="5d")
             
             if hist.empty:
@@ -211,7 +138,6 @@ def get_stock_info(yf_ticker, max_retries=3):
             
             current_price = hist['Close'].iloc[-1]
             
-            # info 가져오기 (실패해도 계속 진행)
             try:
                 info = ticker.info
                 company_name = info.get('longName', info.get('shortName', '알 수 없음'))
@@ -225,7 +151,6 @@ def get_stock_info(yf_ticker, max_retries=3):
                 time.sleep(1)
                 continue
             else:
-                st.error(f"❌ 데이터 조회 실패 (시도 {attempt + 1}/{max_retries}): {str(e)}")
                 return None, None, None
     
     return None, None, None
@@ -234,40 +159,26 @@ with st.spinner("📊 종목 정보를 불러오는 중..."):
     company_name, current_price, hist_data = get_stock_info(yf_ticker)
 
 if not company_name or not current_price:
-    st.error(f"""
-❌ **종목을 찾을 수 없습니다**: `{ticker_input}`
-
-### 가능한 원인:
-1. 종목 코드가 올바르지 않음
-2. 해당 종목이 상장폐지되었거나 거래 정지 상태
-3. 일시적인 데이터 제공 문제
-
-### 해결 방법:
-- **종목 코드 확인**: 6자리 숫자 (예: 005930)
-- **종목명 사용**: 정확한 한글 이름 (예: 삼성전자, 카카오)
-- 잠시 후 다시 시도해보세요
-""")
+    st.error(f"❌ 종목을 찾을 수 없습니다: `{ticker_input}`")
     st.stop()
 
-# 파싱된 이름이 있으면 우선 사용, 없으면 yfinance에서 가져온 이름 사용
 display_name = parsed_name if parsed_name else company_name
 
-# 종목 헤더 표시
+# 종목 헤더
 st.header(f"🏢 {display_name} ({ticker_code})")
 st.subheader(f"💰 현재가: {current_price:,.0f} 원")
 
-# 최근 가격 변동 표시
 if hist_data is not None and len(hist_data) >= 2:
     prev_price = hist_data['Close'].iloc[-2]
     price_change = current_price - prev_price
     price_change_pct = (price_change / prev_price) * 100
     
     if price_change > 0:
-        st.markdown(f"📈 **전일 대비**: +{price_change:,.0f}원 (+{price_change_pct:.2f}%)", unsafe_allow_html=True)
+        st.markdown(f"📈 **전일 대비**: +{price_change:,.0f}원 (+{price_change_pct:.2f}%)")
     elif price_change < 0:
-        st.markdown(f"📉 **전일 대비**: {price_change:,.0f}원 ({price_change_pct:.2f}%)", unsafe_allow_html=True)
+        st.markdown(f"📉 **전일 대비**: {price_change:,.0f}원 ({price_change_pct:.2f}%)")
     else:
-        st.markdown(f"📊 **전일 대비**: 보합", unsafe_allow_html=True)
+        st.markdown(f"📊 **전일 대비**: 보합")
 
 st.markdown("---")
 
@@ -312,33 +223,83 @@ def get_news_data(company_name, max_news=5):
         
         return news_list
         
-    except Exception as e:
+    except:
         return []
 
-def analyze_news_with_ai(ticker, news_item):
-    """개별 뉴스 AI 분석"""
+def analyze_news_with_ai(ticker, company_name, news_item):
+    """개별 뉴스 AI 분석 (간접 영향 포함)"""
     if not GEMINI_MODEL:
         return "중립", 50, "AI 분석 불가"
     
     try:
         prompt = f"""당신은 20년 경력의 전문 증권 애널리스트입니다.
 
-다음 뉴스가 주식 '{ticker}'에 미치는 영향을 분석하세요.
+**분석 대상 종목**: {company_name} (코드: {ticker})
 
 **뉴스 제목**: {news_item['title']}
 **뉴스 내용**: {news_item['description']}
 
-**판단 기준**:
-- **호재** (70~100점): 매출/이익 증가, 신제품 출시, 대규모 계약, 긍정적 실적 발표, 투자 유치, 기술 혁신
-- **악재** (0~30점): 매출/이익 감소, 소송/규제, 부정적 실적, 경영 위기, 리콜, 사고
-- **중립** (31~69점): 단순 공시, 인사 이동, 애매한 내용
+---
 
-**출력 형식** (JSON):
+### 📋 분석 지침
+
+#### 1️⃣ **직접 영향 분석**
+- 이 뉴스가 **{company_name}** 자체에 관한 내용인가?
+- 실적, 매출, 신제품, 계약, 소송 등 직접적 재무 영향이 있는가?
+
+#### 2️⃣ **간접 영향 분석** (중요!)
+- **자회사/계열사**: 자회사 호재 → 모회사도 호재, 자회사 악재 → 모회사도 악재
+- **경쟁사**: 경쟁사 악재(시장점유율 하락, 리콜, 소송) → 본사에는 호재
+- **산업 전체**: 업계 규제 강화, 원자재 가격 급등 → 모든 업체에 악재
+- **공급망**: 주요 납품업체 문제 → 본사 생산 차질 → 악재
+
+#### 3️⃣ **시장 심리 판단**
+- 투자자들이 이 뉴스를 보고 **매수**할까, **매도**할까?
+- 단기(1주), 중기(1개월) 주가에 어떤 영향?
+
+---
+
+### 🎯 점수 기준 (엄격 적용)
+
+**🟢 호재 (70~100점)**
+- 매출/영업이익 증가 (10% 이상)
+- 대규모 수주/계약 (100억 이상)
+- 신제품 출시 (혁신적)
+- 자회사 실적 호조
+- **경쟁사 악재** (시장 점유율 빼앗기)
+- 주가 상승 전망 명확
+
+**🔴 악재 (0~30점)**
+- 매출/영업이익 감소 (5% 이상)
+- 소송, 리콜, 사고
+- 규제 강화, 벌금
+- 자회사 경영 악화
+- 주요 납품업체 문제
+- 주가 하락 전망 명확
+
+**🟡 중립 (31~69점)**
+- 단순 인사 이동
+- 애매한 공시
+- 영향 미미한 소식
+- **장기적으로만** 영향
+
+---
+
+### 📤 출력 형식 (JSON)
+
 {{
   "sentiment": "호재" or "악재" or "중립",
-  "score": 0~100 사이 정수,
-  "reason": "50자 이내 판단 근거"
+  "score": 0~100 사이 정수 (반드시 위 기준 준수),
+  "reason": "구체적 판단 근거 (50자 이내)",
+  "impact_type": "직접" or "간접" or "시장심리"
 }}
+
+---
+
+**중요**: 
+- 중립은 **최후의 수단**. 명확히 판단하세요.
+- 간접 영향도 **반드시** 고려하세요.
+- 점수는 **엄격**하게 (애매하면 중립)
 
 반드시 JSON 형식으로만 답변하세요."""
 
@@ -346,10 +307,10 @@ def analyze_news_with_ai(ticker, news_item):
             prompt,
             generation_config={
                 'temperature': 0.0,
-                'top_p': 0.8,
-                'max_output_tokens': 300
+                'top_p': 0.85,
+                'max_output_tokens': 400
             },
-            request_options={'timeout': 15}
+            request_options={'timeout': 20}
         )
         
         text = response.text.strip()
@@ -365,27 +326,42 @@ def analyze_news_with_ai(ticker, news_item):
         sentiment = result.get('sentiment', '중립')
         score = max(0, min(100, int(result.get('score', 50))))
         reason = result.get('reason', '')[:100]
+        impact_type = result.get('impact_type', '직접')
         
-        return sentiment, score, reason
+        # 영향 유형 표시
+        full_reason = f"[{impact_type}] {reason}"
+        
+        return sentiment, score, full_reason
         
     except Exception as e:
-        return "중립", 50, f"분석 오류"
+        return "중립", 50, "분석 오류"
 
 # 뉴스 수집 및 분석
 if NAVER_CLIENT_ID and NAVER_CLIENT_SECRET:
-    with st.spinner("📰 뉴스를 수집하고 분석 중..."):
+    with st.spinner("📰 뉴스를 수집하고 심층 분석 중..."):
         news_list = get_news_data(display_name)
         
         if news_list:
             analyzed_news = []
-            for news in news_list:
-                sentiment, score, reason = analyze_news_with_ai(ticker_code, news)
+            
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for idx, news in enumerate(news_list):
+                status_text.text(f"📊 뉴스 {idx+1}/{len(news_list)} 분석 중...")
+                progress_bar.progress((idx + 1) / len(news_list))
+                
+                sentiment, score, reason = analyze_news_with_ai(ticker_code, display_name, news)
                 analyzed_news.append({
                     **news,
                     'sentiment': sentiment,
                     'score': score,
                     'reason': reason
                 })
+                time.sleep(0.5)
+            
+            progress_bar.empty()
+            status_text.empty()
             
             # 평균 점수 계산
             avg_score = sum(n['score'] for n in analyzed_news) / len(analyzed_news)
@@ -400,26 +376,45 @@ if NAVER_CLIENT_ID and NAVER_CLIENT_SECRET:
             # 종합 평가
             if avg_score >= 65:
                 overall = "🟢 전반적으로 호재"
+                overall_emoji = "📈"
+                recommendation = "**매수 고려**"
             elif avg_score <= 35:
                 overall = "🔴 전반적으로 악재"
+                overall_emoji = "📉"
+                recommendation = "**관망 또는 매도 고려**"
             else:
                 overall = "🟡 중립적"
+                overall_emoji = "📊"
+                recommendation = "**추가 정보 필요**"
             
-            st.markdown(f"### {overall} (평균 {avg_score:.1f}점)")
-            st.markdown(f"**분석 뉴스**: 총 {len(analyzed_news)}건 (호재 {sentiment_counts['호재']}건, 악재 {sentiment_counts['악재']}건, 중립 {sentiment_counts['중립']}건)")
+            st.markdown(f"### {overall_emoji} {overall} (평균 **{avg_score:.1f}점**)")
+            st.markdown(f"**분석 결과**: 호재 **{sentiment_counts['호재']}건**, 악재 **{sentiment_counts['악재']}건**, 중립 **{sentiment_counts['중립']}건** / 총 {len(analyzed_news)}건")
+            st.markdown(f"**투자 의견**: {recommendation}")
             
             # 개별 뉴스 표시
-            with st.expander("📋 개별 뉴스 분석 결과 보기", expanded=True):
+            with st.expander("📋 개별 뉴스 상세 분석 결과", expanded=True):
                 for i, news in enumerate(analyzed_news, 1):
-                    emoji = "🟢" if news['sentiment'] == "호재" else "🔴" if news['sentiment'] == "악재" else "🟡"
+                    if news['sentiment'] == "호재":
+                        emoji = "🟢"
+                        color = "green"
+                    elif news['sentiment'] == "악재":
+                        emoji = "🔴"
+                        color = "red"
+                    else:
+                        emoji = "🟡"
+                        color = "orange"
                     
                     st.markdown(f"""
-**{i}. {emoji} [{news['sentiment']}] {news['title']}**
-- 점수: {news['score']}점
-- 이유: {news['reason']}
-- [원문 보기]({news['link']})
-""")
-                    st.markdown("---")
+<div style="padding: 10px; border-left: 4px solid {color}; background-color: rgba(128,128,128,0.05); margin-bottom: 10px;">
+
+**{i}. {emoji} [{news['sentiment']} {news['score']}점]** {news['title']}
+
+📝 **판단 근거**: {news['reason']}
+
+🔗 [원문 보기]({news['link']})
+
+</div>
+""", unsafe_allow_html=True)
         else:
             st.info("ℹ️ 최근 뉴스를 찾을 수 없습니다.")
 else:
@@ -427,7 +422,7 @@ else:
 
 st.markdown("---")
 
-# 차트 패턴 분석 섹션
+# 차트 패턴 분석
 st.subheader("📈 전문 트레이더 차트 패턴 분석")
 
 CHART_PATTERNS = {
@@ -538,7 +533,6 @@ def detect_chart_pattern_with_ai(ticker, normalized_prices):
     except:
         return None, 0, None
 
-# 가격 데이터 가져오기
 with st.spinner("📊 차트 패턴 분석 중..."):
     prices = get_recent_prices(yf_ticker, days=20)
     
@@ -549,7 +543,6 @@ with st.spinner("📊 차트 패턴 분석 중..."):
         if pattern_name and category:
             pattern_info = CHART_PATTERNS[category][pattern_name]
             
-            # 목표가 및 손절가 계산
             target_str = pattern_info['target']
             stop_str = pattern_info['stop']
             
@@ -567,7 +560,6 @@ with st.spinner("📊 차트 패턴 분석 중..."):
                 target_price = current_price * (1 - target_pct / 100)
                 stop_price = current_price * (1 + stop_pct / 100)
             
-            # 결과 표시
             col1, col2 = st.columns([1, 2])
             
             with col1:
@@ -615,7 +607,7 @@ with st.spinner("📊 차트 패턴 분석 중..."):
 
 st.markdown("---")
 
-# 백테스팅 섹션
+# 백테스팅
 st.subheader("⏮️ 백테스팅 (2주 전 분석)")
 
 @st.cache_data(ttl=600, show_spinner=False)
