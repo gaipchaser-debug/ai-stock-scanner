@@ -369,7 +369,8 @@ with col1:
     st.markdown(f"**1️⃣ 120일선 위 위치**: {'✅ 통과' if buy_conditions['above_ma120'] else '❌ 실패'}")
     st.markdown(f"**2️⃣ 20일 최고가 경신**: {'✅ 통과' if buy_conditions['new_high_20d'] else '❌ 실패'}")
 with col2:
-    st.markdown(f"**3️⃣ 등락률 +5~15%**: {'✅ 통과' if buy_conditions['optimal_gain'] else f'❌ 실패 ({buy_conditions[\"pct_change\"]:.1f}%)'}")
+    optimal_text = '✅ 통과' if buy_conditions['optimal_gain'] else f"❌ 실패 ({buy_conditions['pct_change']:.1f}%)"
+    st.markdown(f"**3️⃣ 등락률 +5~15%**: {optimal_text}")
     st.markdown(f"**4️⃣ 거래량 2배 이상**: {'✅ 통과' if buy_conditions['volume_2x'] else '❌ 실패'}")
 
 # 모듈3 점수
