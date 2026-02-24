@@ -10,10 +10,9 @@ import time
 from bs4 import BeautifulSoup
 import os
 
-# 페이지 설정
-st.set_page_config(page_title="AI 주식 팩트 스캐너", page_icon="📊", layout="wide")
+st.set_page_config(page_title="전문가급 주식 분석 시스템", page_icon="📊", layout="wide")
 
-# API 키 로드
+# API 키
 def get_api_key(key_name):
     key = os.getenv(key_name)
     if key:
@@ -29,536 +28,516 @@ GEMINI_API_KEY = get_api_key("GEMINI_API_KEY")
 NAVER_CLIENT_ID = get_api_key("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = get_api_key("NAVER_CLIENT_SECRET")
 
-# Gemini API 설정
 if GEMINI_API_KEY:
     try:
         import google.generativeai as genai
         genai.configure(api_key=GEMINI_API_KEY)
         GEMINI_MODEL = genai.GenerativeModel('gemini-1.5-flash')
-    except Exception as e:
+    except:
         GEMINI_MODEL = None
 else:
     GEMINI_MODEL = None
 
-# 주요 한국 주식 종목 매핑
-STOCK_NAME_TO_CODE = {
-    "삼성전자": "005930", "sk하이닉스": "000660", "삼성바이오로직스": "207940",
-    "현대차": "005380", "셀트리온": "068270", "카카오": "035720",
-    "naver": "035420", "네이버": "035420", "lg화학": "051910",
-    "lg전자": "066570", "현대모비스": "012330", "삼성물산": "028260",
-    "포스코홀딩스": "005490", "kb금융": "105560", "신한지주": "055550",
-    "삼성sdi": "006400", "기아": "000270", "하나금융지주": "086790",
-    "sk이노베이션": "096770", "lg생활건강": "051900", "키움증권": "039490",
-    "미래에셋증권": "006800", "하이브": "352820"
+STOCK_MAP = {
+    "삼성전자": "005930", "sk하이닉스": "000660", "카카오": "035720",
+    "네이버": "035420", "lg화학": "051910", "현대차": "005380",
+    "키움증권": "039490", "미래에셋증권": "006800"
 }
 
-# 세션 스테이트
 if 'current_ticker' not in st.session_state:
     st.session_state.current_ticker = None
 
 def reset_session():
     st.cache_data.clear()
 
-def parse_ticker_input(user_input):
+def parse_ticker(user_input):
     user_input = user_input.strip().lower()
     if user_input.isdigit():
         return user_input, None
-    if user_input in STOCK_NAME_TO_CODE:
-        code = STOCK_NAME_TO_CODE[user_input]
-        name = next((k for k, v in STOCK_NAME_TO_CODE.items() if v == code), None)
+    if user_input in STOCK_MAP:
+        code = STOCK_MAP[user_input]
+        name = next((k for k, v in STOCK_MAP.items() if v == code), None)
         return code, name.upper() if name else None
     return user_input, None
 
-# 헤더
-st.title("📊 AI 주식 투자 판단 스캐너")
-st.markdown("**💡 핵심 질문: 지금 이 가격에서 사야 할까, 말아야 할까?**")
+# === 헤더 ===
+st.title("📊 전문가급 주식 분석 시스템 (4대 모듈)")
+st.markdown("**승률 50% → 70% 상승을 위한 정밀 분석**")
 st.markdown("---")
 
-# 종목 입력
 col1, col2 = st.columns([3, 1])
 with col1:
-    ticker_input = st.text_input(
-        "종목 코드 또는 이름 입력", 
-        key="ticker_input",
-        on_change=reset_session,
-        placeholder="예: 삼성전자, 005930, 카카오"
-    )
-
+    ticker_input = st.text_input("종목 입력", key="ticker", on_change=reset_session, placeholder="예: 삼성전자, 005930")
 with col2:
     st.markdown("<br>", unsafe_allow_html=True)
-    analyze_button = st.button("🔍 분석 시작", type="primary", use_container_width=True)
+    analyze_btn = st.button("🔍 분석", type="primary", use_container_width=True)
 
-if not ticker_input or not analyze_button:
-    st.info("👆 종목을 입력하고 '분석 시작' 버튼을 클릭하세요.")
+if not ticker_input or not analyze_btn:
+    st.info("👆 종목을 입력하세요")
     st.stop()
 
-ticker_code, parsed_name = parse_ticker_input(ticker_input)
-
+ticker_code, parsed_name = parse_ticker(ticker_input)
 if st.session_state.current_ticker != ticker_code:
     st.session_state.current_ticker = ticker_code
     reset_session()
 
 yf_ticker = ticker_code + ".KS" if ticker_code.isdigit() else ticker_code
 
-# 종목 정보 가져오기
+# === 데이터 로드 ===
 @st.cache_data(ttl=300, show_spinner=False)
-def get_stock_info(yf_ticker, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            ticker = yf.Ticker(yf_ticker)
-            hist = ticker.history(period="5d")
-            
-            if hist.empty:
-                if attempt < max_retries - 1:
-                    time.sleep(1)
-                    continue
-                return None, None, None
-            
-            current_price = hist['Close'].iloc[-1]
-            
-            try:
-                info = ticker.info
-                company_name = info.get('longName', info.get('shortName', '알 수 없음'))
-            except:
-                company_name = "알 수 없음"
-            
-            return company_name, current_price, hist
-        except:
-            if attempt < max_retries - 1:
-                time.sleep(1)
-                continue
+def load_stock_data(yf_ticker, period="6mo"):
+    try:
+        ticker = yf.Ticker(yf_ticker)
+        hist = ticker.history(period=period)
+        if hist.empty:
             return None, None, None
-    return None, None, None
+        current_price = hist['Close'].iloc[-1]
+        try:
+            info = ticker.info
+            name = info.get('longName', info.get('shortName', '알 수 없음'))
+        except:
+            name = "알 수 없음"
+        return name, current_price, hist
+    except:
+        return None, None, None
 
-with st.spinner("📊 종목 정보 로딩..."):
-    company_name, current_price, hist_data = get_stock_info(yf_ticker)
+with st.spinner("📊 데이터 로딩..."):
+    company_name, current_price, hist = load_stock_data(yf_ticker)
 
-if not company_name or not current_price:
-    st.error(f"❌ 종목을 찾을 수 없습니다: `{ticker_input}`")
+if not hist or hist.empty:
+    st.error(f"❌ 종목 '{ticker_input}' 데이터를 찾을 수 없습니다")
     st.stop()
 
 display_name = parsed_name if parsed_name else company_name
-
 st.header(f"🏢 {display_name} ({ticker_code})")
-st.subheader(f"💰 현재가: {current_price:,.0f} 원")
+st.subheader(f"💰 현재가: {current_price:,.0f}원")
 
-if hist_data is not None and len(hist_data) >= 2:
-    prev_price = hist_data['Close'].iloc[-2]
-    price_change = current_price - prev_price
-    price_change_pct = (price_change / prev_price) * 100
-    
-    if price_change > 0:
-        st.markdown(f"📈 **전일 대비**: +{price_change:,.0f}원 (+{price_change_pct:.2f}%)")
-    elif price_change < 0:
-        st.markdown(f"📉 **전일 대비**: {price_change:,.0f}원 ({price_change_pct:.2f}%)")
-
-st.markdown("---")
-
-# === 핵심 1: 뉴스 분석 (강력 판단) ===
-st.subheader("📰 뉴스 기반 투자 판단")
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def get_news_data(company_name, max_news=5):
-    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        return []
-    try:
-        url = "https://openapi.naver.com/v1/search/news.json"
-        headers = {
-            "X-Naver-Client-Id": NAVER_CLIENT_ID,
-            "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
-        }
-        params = {"query": company_name, "display": max_news, "sort": "date"}
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        response.raise_for_status()
-        items = response.json().get('items', [])
-        news_list = []
-        for item in items[:max_news]:
-            title = BeautifulSoup(item['title'], 'html.parser').get_text()
-            desc = BeautifulSoup(item['description'], 'html.parser').get_text()
-            news_list.append({'title': title, 'description': desc, 'link': item['link']})
-            time.sleep(0.2)
-        return news_list
-    except:
-        return []
-
-def analyze_news_for_investment(ticker, company_name, news_item):
-    """뉴스 기반 투자 판단 (강력 판단 강제)"""
-    if not GEMINI_MODEL:
-        return "중립", 50, "AI 없음"
-    
-    try:
-        prompt = f"""당신은 주식 투자자입니다. **{company_name} ({ticker})** 주식을 **지금 사야 할지** 판단하세요.
-
-**뉴스**:
-- 제목: {news_item['title']}
-- 내용: {news_item['description']}
-
----
-
-### ⚡ 판단 규칙 (엄격 적용)
-
-**🟢 강력 매수 (80~100점)**
-- 실적 급증 (영업이익 +20% 이상)
-- 대형 수주 (1000억 이상)
-- 혁신 신제품
-- 경쟁사 몰락 (시장 독점 기회)
-
-**🟢 약한 매수 (60~79점)**
-- 실적 개선 (+10~20%)
-- 중형 수주 (100~1000억)
-- 자회사 호재
-
-**🔴 약한 매도 (40~59점)**
-- 실적 둔화 (-5~-10%)
-- 소형 악재
-- 업계 불확실성
-
-**🔴 강력 매도 (0~39점)**
-- 실적 급락 (-10% 이상)
-- 대형 소송/리콜
-- 경영 위기
-- 규제 강타
-
----
-
-### 📤 출력 (JSON)
-{{
-  "action": "매수" or "매도" or "관망",
-  "score": 0~100,
-  "reason": "30자 이내 핵심 근거"
-}}
-
-**중요**: 관망은 마지막 선택지. 명확히 판단하세요!"""
-
-        response = GEMINI_MODEL.generate_content(
-            prompt,
-            generation_config={'temperature': 0.0, 'top_p': 0.7, 'max_output_tokens': 300},
-            request_options={'timeout': 20}
-        )
-        
-        text = response.text.strip()
-        if '```json' in text:
-            text = text.split('```json')[1].split('```')[0].strip()
-        elif '```' in text:
-            text = text.split('```')[1].split('```')[0].strip()
-        
-        result = json.loads(text)
-        action = result.get('action', '관망')
-        score = max(0, min(100, int(result.get('score', 50))))
-        reason = result.get('reason', '')[:50]
-        
-        return action, score, reason
-    except:
-        return "관망", 50, "분석 실패"
-
-# 뉴스 분석
-if NAVER_CLIENT_ID and NAVER_CLIENT_SECRET:
-    with st.spinner("📰 뉴스 분석 중..."):
-        news_list = get_news_data(display_name)
-        
-        if news_list:
-            analyzed_news = []
-            for news in news_list:
-                action, score, reason = analyze_news_for_investment(ticker_code, display_name, news)
-                analyzed_news.append({**news, 'action': action, 'score': score, 'reason': reason})
-            
-            avg_score = sum(n['score'] for n in analyzed_news) / len(analyzed_news)
-            
-            buy_count = sum(1 for n in analyzed_news if n['action'] == '매수')
-            sell_count = sum(1 for n in analyzed_news if n['action'] == '매도')
-            hold_count = sum(1 for n in analyzed_news if n['action'] == '관망')
-            
-            # 최종 판단
-            if avg_score >= 65:
-                final_decision = "🟢 **매수 추천**"
-                decision_color = "green"
-                action_text = "지금 투자하기 좋은 시점입니다."
-            elif avg_score <= 45:
-                final_decision = "🔴 **매수 비추천**"
-                decision_color = "red"
-                action_text = "지금은 투자를 보류하는 것이 좋습니다."
-            else:
-                final_decision = "🟡 **신중 판단 필요**"
-                decision_color = "orange"
-                action_text = "추가 정보를 확인한 후 결정하세요."
-            
-            st.markdown(f"### {final_decision} (평균 **{avg_score:.0f}점**)")
-            st.markdown(f"**뉴스 판단**: 매수 신호 **{buy_count}건**, 매도 신호 **{sell_count}건**, 관망 **{hold_count}건**")
-            st.markdown(f"**투자 의견**: {action_text}")
-            
-            with st.expander("📋 개별 뉴스 분석", expanded=False):
-                for i, news in enumerate(analyzed_news, 1):
-                    if news['action'] == "매수":
-                        emoji = "🟢"
-                    elif news['action'] == "매도":
-                        emoji = "🔴"
-                    else:
-                        emoji = "🟡"
-                    
-                    st.markdown(f"""
-**{i}. {emoji} [{news['action']} {news['score']}점]** {news['title']}
-- 📝 {news['reason']}
-- 🔗 [원문]({news['link']})
-""")
-                    st.markdown("---")
-        else:
-            st.info("ℹ️ 최근 뉴스가 없습니다.")
-else:
-    st.warning("⚠️ 네이버 API 키 필요")
+if len(hist) >= 2:
+    prev = hist['Close'].iloc[-2]
+    change = current_price - prev
+    pct = (change / prev) * 100
+    if change > 0:
+        st.markdown(f"📈 전일 대비: +{change:,.0f}원 (+{pct:.2f}%)")
+    elif change < 0:
+        st.markdown(f"📉 전일 대비: {change:,.0f}원 ({pct:.2f}%)")
 
 st.markdown("---")
 
-# === 핵심 2: 차트 기반 투자 판단 ===
-st.subheader("📈 차트 기반 투자 판단")
+# ==========================================
+# 모듈 1: 추세 및 패턴 인식 (Trend & Pattern)
+# ==========================================
+st.subheader("📐 모듈 1: 추세 및 패턴 인식")
 
-@st.cache_data(ttl=600, show_spinner=False)
-def get_chart_data(yf_ticker, days=60):
-    try:
-        ticker = yf.Ticker(yf_ticker)
-        hist = ticker.history(period=f"{days+10}d")
-        if len(hist) < days:
-            return None
-        return hist.tail(days)
-    except:
-        return None
+def calculate_ma(prices, period):
+    """이동평균선 계산"""
+    return prices.rolling(window=period).mean()
 
-def analyze_chart_for_investment(ticker, current_price, hist_data):
-    """차트 패턴 기반 투자 판단"""
-    if not GEMINI_MODEL or hist_data is None or len(hist_data) < 20:
-        return None
+def detect_pattern(hist):
+    """캔들스틱 패턴 감지"""
+    if len(hist) < 3:
+        return None, 0
     
-    try:
-        # 최근 20일 가격
-        recent_prices = hist_data['Close'].tail(20).values
-        
-        # 기술적 지표 계산
-        prices = hist_data['Close'].values
-        
-        # 이동평균선
-        ma5 = prices[-5:].mean()
-        ma20 = prices[-20:].mean()
-        ma60 = prices[-60:].mean() if len(prices) >= 60 else ma20
-        
-        # RSI (간단 버전)
-        changes = np.diff(prices[-14:])
-        gains = changes[changes > 0].sum()
-        losses = abs(changes[changes < 0].sum())
-        rsi = 100 - (100 / (1 + (gains / (losses + 0.0001))))
-        
-        # 볼린저 밴드
-        bb_std = prices[-20:].std()
-        bb_upper = ma20 + 2 * bb_std
-        bb_lower = ma20 - 2 * bb_std
-        
-        # MACD (간단)
-        ema12 = prices[-12:].mean()
-        ema26 = prices[-26:].mean() if len(prices) >= 26 else ema12
-        macd = ema12 - ema26
-        
-        # 가격 정규화
-        min_p = recent_prices.min()
-        max_p = recent_prices.max()
-        if max_p > min_p:
-            normalized = ((recent_prices - min_p) / (max_p - min_p) * 100).tolist()
-        else:
-            normalized = [50.0] * len(recent_prices)
-        
-        prompt = f"""당신은 주식 차트 전문가입니다. **{ticker}** 주식을 **지금 {current_price:,.0f}원에 사야 할지** 판단하세요.
-
-**📊 차트 데이터**:
-- 현재가: {current_price:,.0f}원
-- 5일 이평: {ma5:,.0f}원
-- 20일 이평: {ma20:,.0f}원
-- 60일 이평: {ma60:,.0f}원
-- RSI: {rsi:.1f}
-- 볼린저 상단: {bb_upper:,.0f}원
-- 볼린저 하단: {bb_lower:,.0f}원
-- MACD: {macd:.2f}
-- 최근 20일 추세: {normalized}
-
----
-
-### 📐 분석 기준
-
-**🟢 매수 신호**:
-- 골든크로스 (단기>장기 이평)
-- RSI < 30 (과매도)
-- 볼린저 하단 이탈 후 반등
-- 상승 추세선 형성
-- 지지선 터치 후 반등
-
-**🔴 매도 신호**:
-- 데드크로스 (단기<장기 이평)
-- RSI > 70 (과매수)
-- 볼린저 상단 돌파 후 하락
-- 하락 추세선 형성
-- 저항선 실패
-
----
-
-### 📤 출력 (JSON)
-{{
-  "decision": "매수" or "매도" or "관망",
-  "score": 0~100,
-  "theory": "적용한 이론 (예: 골든크로스, RSI 과매도)",
-  "target_price": 목표가 (정수),
-  "reason": "30자 이내 판단 근거"
-}}
-
-명확히 판단하세요!"""
-
-        response = GEMINI_MODEL.generate_content(
-            prompt,
-            generation_config={'temperature': 0.0, 'top_p': 0.8, 'max_output_tokens': 400},
-            request_options={'timeout': 20}
-        )
-        
-        text = response.text.strip()
-        if '```json' in text:
-            text = text.split('```json')[1].split('```')[0].strip()
-        elif '```' in text:
-            text = text.split('```')[1].split('```')[0].strip()
-        
-        result = json.loads(text)
-        
-        return {
-            'decision': result.get('decision', '관망'),
-            'score': max(0, min(100, int(result.get('score', 50)))),
-            'theory': result.get('theory', ''),
-            'target_price': int(result.get('target_price', current_price)),
-            'reason': result.get('reason', '')[:50],
-            'ma5': ma5,
-            'ma20': ma20,
-            'ma60': ma60,
-            'rsi': rsi
-        }
-    except Exception as e:
-        return None
-
-with st.spinner("📊 차트 분석 중..."):
-    chart_data = get_chart_data(yf_ticker, days=60)
+    last = hist.iloc[-1]
+    prev = hist.iloc[-2]
     
-    if chart_data is not None:
-        analysis = analyze_chart_for_investment(ticker_code, current_price, chart_data)
-        
-        if analysis:
-            # 결과 표시
-            if analysis['decision'] == "매수":
-                decision_emoji = "🟢"
-                decision_text = "**매수 추천**"
-            elif analysis['decision'] == "매도":
-                decision_emoji = "🔴"
-                decision_text = "**매수 비추천**"
-            else:
-                decision_emoji = "🟡"
-                decision_text = "**신중 판단**"
-            
-            col1, col2 = st.columns([1, 2])
-            
-            with col1:
-                st.markdown(f"### {decision_emoji} {decision_text}")
-                st.markdown(f"**신뢰도**: {analysis['score']}점")
-                st.markdown(f"**적용 이론**: {analysis['theory']}")
-                st.markdown(f"**목표가**: {analysis['target_price']:,.0f}원")
-                st.markdown(f"**판단 근거**: {analysis['reason']}")
-                
-                st.markdown("---")
-                
-                st.markdown(f"""
-**📊 기술적 지표**:
-- 5일 이평: {analysis['ma5']:,.0f}원
-- 20일 이평: {analysis['ma20']:,.0f}원
-- 60일 이평: {analysis['ma60']:,.0f}원
-- RSI: {analysis['rsi']:.1f}
-""")
-            
-            with col2:
-                # 차트 그리기
-                fig = go.Figure()
-                
-                prices = chart_data['Close'].values
-                dates = chart_data.index
-                
-                # 종가
-                fig.add_trace(go.Scatter(
-                    x=dates, y=prices,
-                    mode='lines',
-                    name='종가',
-                    line=dict(color='royalblue', width=2)
-                ))
-                
-                # 이동평균선
-                fig.add_trace(go.Scatter(
-                    x=dates[-20:],
-                    y=[analysis['ma20']] * 20,
-                    mode='lines',
-                    name='20일 이평',
-                    line=dict(color='orange', width=1, dash='dash')
-                ))
-                
-                # 현재가 표시
-                fig.add_trace(go.Scatter(
-                    x=[dates[-1]],
-                    y=[current_price],
-                    mode='markers',
-                    name='현재가',
-                    marker=dict(size=12, color='red', symbol='star')
-                ))
-                
-                # 목표가 표시
-                if analysis['target_price'] != current_price:
-                    fig.add_trace(go.Scatter(
-                        x=[dates[-1]],
-                        y=[analysis['target_price']],
-                        mode='markers',
-                        name='목표가',
-                        marker=dict(size=10, color='green', symbol='diamond')
-                    ))
-                
-                fig.update_layout(
-                    title=f"{analysis['theory']} 분석 (최근 60일)",
-                    xaxis_title="날짜",
-                    yaxis_title="가격 (원)",
-                    height=450,
-                    hovermode='x unified'
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("ℹ️ 차트 패턴 분석 실패")
+    open_p = last['Open']
+    close_p = last['Close']
+    high_p = last['High']
+    low_p = last['Low']
+    
+    body = abs(close_p - open_p)
+    upper_shadow = high_p - max(open_p, close_p)
+    lower_shadow = min(open_p, close_p) - low_p
+    
+    # 상승 장악형 (Bullish Engulfing)
+    if close_p > open_p and prev['Close'] < prev['Open']:
+        if close_p > prev['Open'] and open_p < prev['Close']:
+            return "상승 장악형 (강세)", 80
+    
+    # 망치형 (Hammer)
+    if lower_shadow > body * 2 and upper_shadow < body * 0.3:
+        return "망치형 (바닥 반전)", 75
+    
+    # 샛별형 (Morning Star) - 간단 버전
+    if len(hist) >= 3:
+        prev2 = hist.iloc[-3]
+        if prev2['Close'] < prev2['Open'] and close_p > open_p:
+            if prev['Close'] < prev['Open']:
+                return "샛별형 (반전)", 70
+    
+    # 하락 장악형
+    if close_p < open_p and prev['Close'] > prev['Open']:
+        if close_p < prev['Open'] and open_p > prev['Close']:
+            return "하락 장악형 (약세)", 20
+    
+    # 유성형 (Shooting Star)
+    if upper_shadow > body * 2 and lower_shadow < body * 0.3:
+        return "유성형 (고점 저항)", 25
+    
+    return None, 50
+
+def check_ma_alignment(ma5, ma20, ma60, ma120):
+    """이동평균 정배열/역배열 확인"""
+    # 정배열: 단기 > 중기 > 장기
+    if ma5 > ma20 > ma60 > ma120:
+        return "정배열 (강세)", 85
+    # 역배열
+    elif ma5 < ma20 < ma60 < ma120:
+        return "역배열 (약세)", 20
     else:
-        st.warning("⚠️ 차트 데이터 부족")
+        return "혼조", 50
+
+def check_golden_cross(ma20_current, ma20_prev, ma60_current, ma60_prev):
+    """골든크로스 확인"""
+    if ma20_prev < ma60_prev and ma20_current > ma60_current:
+        return True, 90
+    elif ma20_prev > ma60_prev and ma20_current < ma60_current:
+        return True, 10  # 데드크로스
+    return False, 50
+
+# 이동평균선 계산
+prices = hist['Close']
+ma5 = calculate_ma(prices, 5)
+ma20 = calculate_ma(prices, 20)
+ma60 = calculate_ma(prices, 60)
+ma120 = calculate_ma(prices, 120)
+
+# 패턴 감지
+pattern_name, pattern_score = detect_pattern(hist)
+
+# 정배열/역배열
+alignment, alignment_score = check_ma_alignment(
+    ma5.iloc[-1], ma20.iloc[-1], ma60.iloc[-1], ma120.iloc[-1]
+)
+
+# 골든크로스
+golden_cross, gc_score = check_golden_cross(
+    ma20.iloc[-1], ma20.iloc[-2],
+    ma60.iloc[-1], ma60.iloc[-2]
+)
+
+# 모듈1 종합 점수
+module1_score = (pattern_score * 0.4 + alignment_score * 0.4 + gc_score * 0.2)
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric("캔들 패턴", pattern_name if pattern_name else "패턴 없음", f"{pattern_score}점")
+with col2:
+    st.metric("이동평균 정렬", alignment, f"{alignment_score}점")
+with col3:
+    st.metric("골든크로스", "발생" if golden_cross else "미발생", f"{gc_score}점")
+
+if module1_score >= 70:
+    st.success(f"✅ 모듈1 통과 ({module1_score:.0f}점) - 추세 상승 환경")
+elif module1_score <= 40:
+    st.error(f"❌ 모듈1 실패 ({module1_score:.0f}점) - 투자 부적합")
+else:
+    st.warning(f"⚠️ 모듈1 보통 ({module1_score:.0f}점) - 신중 판단")
 
 st.markdown("---")
 
+# ==========================================
+# 모듈 2: 거래량 및 수급 검증
+# ==========================================
+st.subheader("📊 모듈 2: 거래량 및 수급 검증")
+
+def calculate_volume_metrics(hist):
+    """거래량 지표 계산"""
+    volumes = hist['Volume']
+    vma20 = volumes.rolling(window=20).mean()
+    
+    today_vol = volumes.iloc[-1]
+    avg_vol = vma20.iloc[-1]
+    
+    # 돌파 신뢰도: 오늘 거래량이 평균의 200% 이상?
+    vol_ratio = today_vol / avg_vol
+    breakthrough = vol_ratio >= 2.0
+    
+    # 조정 건전성: 주가 하락 시 거래량 감소?
+    price_change = (hist['Close'].iloc[-1] - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]
+    vol_change = (today_vol - volumes.iloc[-2]) / volumes.iloc[-2]
+    
+    healthy_correction = price_change < 0 and vol_change < 0
+    panic_selling = price_change < -0.03 and vol_change > 0.5
+    
+    # 일평균 거래대금
+    avg_value = (hist['Close'].iloc[-20:] * hist['Volume'].iloc[-20:]).mean()
+    penny_stock = avg_value < 10_000_000_000  # 100억 미만
+    
+    return {
+        'vol_ratio': vol_ratio,
+        'breakthrough': breakthrough,
+        'healthy_correction': healthy_correction,
+        'panic_selling': panic_selling,
+        'avg_value': avg_value,
+        'penny_stock': penny_stock
+    }
+
+vol_metrics = calculate_volume_metrics(hist)
+
+# 모듈2 점수
+module2_score = 50
+if vol_metrics['breakthrough']:
+    module2_score += 30
+if vol_metrics['healthy_correction']:
+    module2_score += 10
+if vol_metrics['panic_selling']:
+    module2_score -= 40
+if vol_metrics['penny_stock']:
+    module2_score -= 20
+
+module2_score = max(0, min(100, module2_score))
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric("거래량 비율", f"{vol_metrics['vol_ratio']:.1f}배", 
+              "돌파 신뢰" if vol_metrics['breakthrough'] else "보통")
+with col2:
+    st.metric("조정 상태", 
+              "건전" if vol_metrics['healthy_correction'] else "패닉" if vol_metrics['panic_selling'] else "정상")
+with col3:
+    st.metric("일평균 거래대금", f"{vol_metrics['avg_value']/1e8:.0f}억원",
+              "⚠️ 페니스탁" if vol_metrics['penny_stock'] else "적정")
+
+if module2_score >= 70:
+    st.success(f"✅ 모듈2 통과 ({module2_score:.0f}점) - 진성 신호")
+elif module2_score <= 40:
+    st.error(f"❌ 모듈2 실패 ({module2_score:.0f}점) - 거짓 신호(Fakeout)")
+else:
+    st.warning(f"⚠️ 모듈2 보통 ({module2_score:.0f}점)")
+
+st.markdown("---")
+
+# ==========================================
+# 모듈 3: 매수 시그널 발생
+# ==========================================
+st.subheader("🎯 모듈 3: 매수 시그널 발생")
+
+def check_buy_signal(current_price, hist, ma120):
+    """매수 시그널 조건 검증"""
+    conditions = {}
+    
+    # 조건1: 120일선 위
+    cond1 = current_price > ma120.iloc[-1]
+    conditions['above_ma120'] = cond1
+    
+    # 조건2: 20일 최고가 경신
+    high_20d = hist['High'].iloc[-20:].max()
+    cond2 = current_price >= high_20d
+    conditions['new_high_20d'] = cond2
+    
+    # 조건3: 등락률 +5% ~ +15%
+    prev_close = hist['Close'].iloc[-2]
+    pct_change = (current_price - prev_close) / prev_close * 100
+    cond3 = 5 <= pct_change <= 15
+    conditions['optimal_gain'] = cond3
+    conditions['pct_change'] = pct_change
+    
+    # 조건4: 거래량 2배 이상
+    today_vol = hist['Volume'].iloc[-1]
+    vma20 = hist['Volume'].iloc[-20:].mean()
+    cond4 = today_vol >= vma20 * 2
+    conditions['volume_2x'] = cond4
+    
+    # 전체 조건
+    all_pass = cond1 and cond2 and cond3 and cond4
+    conditions['signal'] = all_pass
+    
+    return conditions
+
+buy_conditions = check_buy_signal(current_price, hist, ma120)
+
+st.markdown("### 📋 매수 조건 체크")
+col1, col2 = st.columns(2)
+with col1:
+    st.markdown(f"1️⃣ 120일선 위치: {'✅ 통과' if buy_conditions['above_ma120'] else '❌ 실패'}")
+    st.markdown(f"2️⃣ 20일 최고가 경신: {'✅ 통과' if buy_conditions['new_high_20d'] else '❌ 실패'}")
+with col2:
+    st.markdown(f"3️⃣ 등락률 적정: {'✅ 통과' if buy_conditions['optimal_gain'] else f'❌ 실패 ({buy_conditions['pct_change']:.1f}%)'}")
+    st.markdown(f"4️⃣ 거래량 2배: {'✅ 통과' if buy_conditions['volume_2x'] else '❌ 실패'}")
+
+if buy_conditions['signal']:
+    module3_score = 95
+    st.success(f"🎯 **매수 시그널 발생!** ({module3_score}점)")
+else:
+    passed = sum([buy_conditions['above_ma120'], buy_conditions['new_high_20d'], 
+                  buy_conditions['optimal_gain'], buy_conditions['volume_2x']])
+    module3_score = 25 + passed * 15
+    st.warning(f"⏳ 매수 시그널 대기 중 ({module3_score}점) - {passed}/4 조건 충족")
+
+st.markdown("---")
+
+# ==========================================
+# 모듈 4: 리스크 관리 및 청산
+# ==========================================
+st.subheader("🛡️ 모듈 4: 리스크 관리 및 청산")
+
+def calculate_risk_management(current_price, hist, ma20):
+    """손절가/익절가 계산"""
+    # 오늘 캔들
+    today = hist.iloc[-1]
+    
+    # 손절가 계산
+    stop_loss_options = []
+    
+    # 1. 진입 기준봉의 시가/저가
+    stop_loss_options.append(('기준봉 시가', today['Open']))
+    stop_loss_options.append(('기준봉 저가', today['Low']))
+    
+    # 2. 현재가 대비 -3% ~ -5%
+    stop_loss_options.append(('-3% 손절', current_price * 0.97))
+    stop_loss_options.append(('-5% 손절', current_price * 0.95))
+    
+    # 3. 20일 이평선
+    stop_loss_options.append(('20일선', ma20.iloc[-1]))
+    
+    # 최종 손절가: 가장 가까운 하단 가격
+    stop_loss = max([price for name, price in stop_loss_options if price < current_price], default=current_price * 0.95)
+    
+    # 익절가 계산 (손익비 1:2)
+    risk = current_price - stop_loss
+    take_profit = current_price + risk * 2
+    
+    # 트레일링 스탑 (고점 -3%)
+    recent_high = hist['High'].iloc[-5:].max()
+    trailing_stop = recent_high * 0.97
+    
+    return {
+        'stop_loss': stop_loss,
+        'stop_loss_pct': (stop_loss - current_price) / current_price * 100,
+        'take_profit': take_profit,
+        'take_profit_pct': (take_profit - current_price) / current_price * 100,
+        'trailing_stop': trailing_stop,
+        'risk_reward': 2.0
+    }
+
+risk_mgmt = calculate_risk_management(current_price, hist, ma20)
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric("💀 손절가", f"{risk_mgmt['stop_loss']:,.0f}원", 
+              f"{risk_mgmt['stop_loss_pct']:.1f}%")
+with col2:
+    st.metric("💰 익절가", f"{risk_mgmt['take_profit']:,.0f}원",
+              f"+{risk_mgmt['take_profit_pct']:.1f}%")
+with col3:
+    st.metric("📉 트레일링 스탑", f"{risk_mgmt['trailing_stop']:,.0f}원")
+
+st.info(f"📐 **손익비**: 1:{risk_mgmt['risk_reward']:.1f} (리스크 1원당 {risk_mgmt['risk_reward']:.1f}원 수익 기대)")
+
+module4_score = 100  # 리스크 관리는 항상 적용 가능
+
+st.markdown("---")
+
+# ==========================================
 # 최종 종합 판단
+# ==========================================
 st.subheader("🎯 최종 투자 판단")
 
-if 'analyzed_news' in locals() and analyzed_news and analysis:
-    news_score = avg_score
-    chart_score = analysis['score']
-    
-    # 가중 평균 (뉴스 40%, 차트 60%)
-    final_score = news_score * 0.4 + chart_score * 0.6
-    
-    if final_score >= 65:
-        final_emoji = "🟢"
-        final_text = "**매수 추천**"
-        final_advice = f"뉴스와 차트 모두 긍정적입니다. 목표가 {analysis['target_price']:,.0f}원을 노려보세요."
-    elif final_score <= 45:
-        final_emoji = "🔴"
-        final_text = "**매수 비추천**"
-        final_advice = "현재는 투자를 보류하고 추세 전환을 기다리세요."
+# 가중 평균 (모듈1 30%, 모듈2 30%, 모듈3 40%)
+final_score = (module1_score * 0.3 + module2_score * 0.3 + module3_score * 0.4)
+
+col1, col2 = st.columns([2, 1])
+with col1:
+    if final_score >= 75:
+        st.success(f"""
+## 🟢 강력 매수 추천 ({final_score:.0f}점)
+
+**투자 전략**:
+- 진입가: {current_price:,.0f}원 (현재가)
+- 손절가: {risk_mgmt['stop_loss']:,.0f}원 ({risk_mgmt['stop_loss_pct']:.1f}%)
+- 익절가: {risk_mgmt['take_profit']:,.0f}원 (+{risk_mgmt['take_profit_pct']:.1f}%)
+
+**근거**:
+- 모듈1 (추세): {module1_score:.0f}점 - {alignment}
+- 모듈2 (거래량): {module2_score:.0f}점 - {'진성 신호' if vol_metrics['breakthrough'] else '검증 필요'}
+- 모듈3 (시그널): {module3_score:.0f}점 - {'매수 발생' if buy_conditions['signal'] else '대기'}
+""")
+    elif final_score >= 55:
+        st.warning(f"""
+## 🟡 신중 매수 ({final_score:.0f}점)
+
+**투자 전략**:
+- 분할 매수 추천 (50% 진입)
+- 손절가: {risk_mgmt['stop_loss']:,.0f}원
+- 목표가: {risk_mgmt['take_profit']:,.0f}원
+
+**주의사항**:
+- 일부 조건 미충족
+- 추가 확인 필요
+""")
     else:
-        final_emoji = "🟡"
-        final_text = "**신중 판단 필요**"
-        final_advice = "단기 변동성이 큽니다. 분할 매수를 고려하세요."
-    
-    st.markdown(f"## {final_emoji} {final_text} (종합 {final_score:.0f}점)")
-    st.markdown(f"**뉴스 점수**: {news_score:.0f}점 (40%)")
-    st.markdown(f"**차트 점수**: {chart_score:.0f}점 (60%)")
-    st.markdown(f"**투자 조언**: {final_advice}")
+        st.error(f"""
+## 🔴 매수 비추천 ({final_score:.0f}점)
+
+**판단 근거**:
+- 모듈1: {module1_score:.0f}점 - 추세 약세
+- 모듈2: {module2_score:.0f}점 - 거래량 부족
+- 모듈3: {module3_score:.0f}점 - 시그널 미발생
+
+**조언**: 추세 전환 시까지 관망
+""")
+
+with col2:
+    # 점수 게이지
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=final_score,
+        domain={'x': [0, 1], 'y': [0, 1]},
+        title={'text': "종합 점수"},
+        gauge={
+            'axis': {'range': [0, 100]},
+            'bar': {'color': "darkgreen" if final_score >= 75 else "orange" if final_score >= 55 else "darkred"},
+            'steps': [
+                {'range': [0, 40], 'color': "lightgray"},
+                {'range': [40, 70], 'color': "lightyellow"},
+                {'range': [70, 100], 'color': "lightgreen"}
+            ],
+            'threshold': {
+                'line': {'color': "red", 'width': 4},
+                'thickness': 0.75,
+                'value': 75
+            }
+        }
+    ))
+    fig.update_layout(height=250)
+    st.plotly_chart(fig, use_container_width=True)
+
+# 차트 표시
+st.markdown("---")
+st.subheader("📈 종합 차트")
+
+fig = go.Figure()
+
+# 캔들스틱
+fig.add_trace(go.Candlestick(
+    x=hist.index[-60:],
+    open=hist['Open'].iloc[-60:],
+    high=hist['High'].iloc[-60:],
+    low=hist['Low'].iloc[-60:],
+    close=hist['Close'].iloc[-60:],
+    name='캔들'
+))
+
+# 이동평균선
+fig.add_trace(go.Scatter(x=hist.index[-60:], y=ma20.iloc[-60:], name='20일선', line=dict(color='orange', width=1)))
+fig.add_trace(go.Scatter(x=hist.index[-60:], y=ma60.iloc[-60:], name='60일선', line=dict(color='blue', width=1)))
+fig.add_trace(go.Scatter(x=hist.index[-60:], y=ma120.iloc[-60:], name='120일선', line=dict(color='purple', width=1)))
+
+# 손절/익절가 표시
+fig.add_hline(y=risk_mgmt['stop_loss'], line_dash="dash", line_color="red", annotation_text="손절가")
+fig.add_hline(y=risk_mgmt['take_profit'], line_dash="dash", line_color="green", annotation_text="익절가")
+
+fig.update_layout(
+    title="기술적 분석 차트 (최근 60일)",
+    xaxis_title="날짜",
+    yaxis_title="가격 (원)",
+    height=500,
+    xaxis_rangeslider_visible=False
+)
+
+st.plotly_chart(fig, use_container_width=True)
 
 st.markdown("---")
 st.caption(f"💡 분석 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-st.caption("⚠️ 본 분석은 투자 참고용이며, 투자 결정은 본인의 책임입니다.")
+st.caption("⚠️ 본 분석은 투자 참고용이며, 최종 결정은 본인의 책임입니다.")
