@@ -48,7 +48,7 @@ if 'current_company' not in st.session_state:
 def get_stock_data(ticker_code, yf_ticker, days_ago=0):
     """
     days_ago=0: 오늘 현재가
-    days_ago=14: 14일 전 종가
+    days_ago=10: 10일 전 종가
     """
     if FDR_AVAILABLE:
         try:
@@ -173,40 +173,72 @@ def get_news_data(company_name):
         return []
 
 
-# --- [2-1단계] 개별 뉴스 호재/악재 분석 ---
+# --- [2-1단계] 개별 뉴스 호재/악재 분석 (강화된 프롬프트) ---
 def analyze_single_news(ticker, news_item):
-    """개별 뉴스 하나에 대한 호재/악재 판단"""
+    """개별 뉴스 하나에 대한 호재/악재 명확한 판단"""
     text = f"[제목] {news_item['title']}\n[요약] {news_item['description']}"
     if news_item.get('content'):
-        text += f"\n[본문 일부] {news_item['content'][:500]}"
+        text += f"\n[본문] {news_item['content'][:800]}"
     
-    prompt = f"""당신은 전문 증권 애널리스트입니다. 다음 뉴스 하나를 분석하여 주가 영향도를 판단하세요.
+    prompt = f"""당신은 20년 경력의 전문 증권 애널리스트입니다. 
+다음 뉴스가 주가에 미치는 영향을 **명확하게** 판단하세요.
 
 **종목코드**: {ticker}
 
 **뉴스 내용**:
 {text}
 
-**판단 기준**:
-- **호재**: 실적 개선, 신규 계약/수주, 기술 혁신, 투자 유치, 긍정적 전망, 배당 확대
-- **악재**: 실적 악화, 소송/규제, 경영진 문제, 리스크 증가, 부정적 전망, 감원
-- **중립**: 단순 사실 전달, 영향 불분명
+**판단 기준 (엄격하게 적용)**:
 
-**응답 형식** (반드시 JSON만 출력):
-{{"sentiment": "호재" 또는 "악재" 또는 "중립", "score": 점수(0~100 정수), "reason": "이유(50자 이내)"}}
+🟢 **호재 (70~100점)** - 주가 상승 가능성이 높은 뉴스
+  ✓ 매출/영업이익 증가, 실적 개선
+  ✓ 신규 계약/수주 (특히 대규모)
+  ✓ 기술 혁신, 신제품 출시
+  ✓ 투자 유치, 자금 조달 성공
+  ✓ 시장 점유율 상승
+  ✓ 긍정적 전망, 목표가 상향
+  ✓ 배당 확대, 자사주 매입
+
+🔴 **악재 (0~30점)** - 주가 하락 가능성이 높은 뉴스
+  ✗ 매출/영업이익 감소, 적자
+  ✗ 계약 취소, 수주 실패
+  ✗ 소송, 규제, 제재
+  ✗ 경영진 사퇴/구속
+  ✗ 시장 점유율 하락
+  ✗ 부정적 전망, 목표가 하향
+  ✗ 구조조정, 감원
+
+🟡 **중립 (40~60점)** - 주가 영향이 불분명하거나 단순 사실
+  • 정기 행사/공지 (주총, IR)
+  • 인사 발령 (중립적)
+  • 일반적인 업계 동향
+  • 확정되지 않은 추측성 보도
+
+**중요**: 
+- 뉴스가 "실적 증가", "수주", "매출 상승" 등 긍정적 키워드를 포함하면 **반드시 호재**로 판단
+- 뉴스가 "실적 감소", "적자", "소송", "규제" 등 부정적 키워드를 포함하면 **반드시 악재**로 판단
+- **중립은 최후의 선택**: 명확한 긍정/부정 요소가 없을 때만 사용
+
+**출력 형식** (JSON만):
+{{"sentiment": "호재" or "악재" or "중립", "score": 0~100, "reason": "구체적 이유 50자"}}
+
+예시:
+- "4분기 영업이익 30% 증가" → {{"sentiment": "호재", "score": 88, "reason": "실적 대폭 개선으로 긍정적"}}
+- "소송 패소, 100억 배상" → {{"sentiment": "악재", "score": 25, "reason": "대규모 배상금으로 부정적"}}
+- "정기 주주총회 개최" → {{"sentiment": "중립", "score": 50, "reason": "단순 정기 행사"}}
 """
     
     try:
         model = genai.GenerativeModel(
             'gemini-1.5-flash',
             generation_config={
-                "temperature": 0.0,  # 최대 일관성
+                "temperature": 0.1,  # 약간의 창의성 허용
                 "top_p": 0.9,
-                "max_output_tokens": 200
+                "max_output_tokens": 300
             }
         )
         
-        response = model.generate_content(prompt, request_options={"timeout": 10})
+        response = model.generate_content(prompt, request_options={"timeout": 15})
         text = response.text.strip()
         
         # JSON 추출
@@ -224,14 +256,25 @@ def analyze_single_news(ticker, news_item):
         
         result = json.loads(text.strip())
         
+        sentiment = result.get("sentiment", "중립")
+        score = int(float(result.get("score", 50)))
+        
+        # 점수 기반 감성 재검증
+        if score >= 70:
+            sentiment = "호재"
+        elif score <= 30:
+            sentiment = "악재"
+        else:
+            sentiment = "중립"
+        
         return {
-            "sentiment": result.get("sentiment", "중립"),
-            "score": int(float(result.get("score", 50))),
-            "reason": result.get("reason", "")
+            "sentiment": sentiment,
+            "score": score,
+            "reason": result.get("reason", "")[:100]
         }
         
     except Exception as e:
-        return {"sentiment": "중립", "score": 50, "reason": "분석 실패"}
+        return {"sentiment": "중립", "score": 50, "reason": f"분석 오류: {str(e)[:30]}"}
 
 
 # --- [2-2단계] 전체 뉴스 종합 분석 ---
@@ -251,14 +294,21 @@ def analyze_validity(ticker, news_data_with_sentiment):
     sentiments = [n["sentiment_data"]["sentiment"] for n in news_data_with_sentiment]
     positive_count = sentiments.count("호재")
     negative_count = sentiments.count("악재")
+    neutral_count = sentiments.count("중립")
     
     # 종합 판단
     if positive_count > negative_count:
-        reason = f"호재 뉴스 {positive_count}개, 악재 {negative_count}개로 긍정적 전망"
+        if positive_count >= 3:
+            reason = f"강한 호재! 호재 뉴스 {positive_count}개, 악재 {negative_count}개로 긍정적 전망"
+        else:
+            reason = f"호재 뉴스 {positive_count}개, 악재 {negative_count}개로 긍정적 전망"
     elif negative_count > positive_count:
-        reason = f"악재 뉴스 {negative_count}개, 호재 {positive_count}개로 부정적 전망"
+        if negative_count >= 3:
+            reason = f"강한 악재! 악재 뉴스 {negative_count}개, 호재 {positive_count}개로 부정적 전망"
+        else:
+            reason = f"악재 뉴스 {negative_count}개, 호재 {positive_count}개로 부정적 전망"
     else:
-        reason = f"호재 {positive_count}개, 악재 {negative_count}개로 혼재된 상황"
+        reason = f"혼재 상황: 호재 {positive_count}개, 악재 {negative_count}개, 중립 {neutral_count}개"
     
     return {
         "correlation_score": avg_score,
@@ -266,19 +316,19 @@ def analyze_validity(ticker, news_data_with_sentiment):
     }
 
 
-# --- [3단계] 프랙탈 통계 (14일 = 2주 기준) ---
+# --- [3단계] 프랙탈 통계 (14일 = 2주 기준, 완화된 조건) ---
 @st.cache_data(ttl=3600)
-def get_fractal_statistics(yf_ticker, similarity_threshold=0.90, tail_threshold=0.95, days_offset=0):
+def get_fractal_statistics(yf_ticker, similarity_threshold=0.85, tail_threshold=0.90, days_offset=0):
     """
     과거 14일(2주) 차트 패턴 분석
-    - 전체 14일 유사도 ≥ similarity_threshold
-    - 후반 3일(약 21%) 유사도 ≥ tail_threshold
+    - 전체 14일 유사도 ≥ similarity_threshold (기본 85%)
+    - 후반 3일(약 21%) 유사도 ≥ tail_threshold (기본 90%)
     - 미래 14일 예측
     """
     try:
-        # 과거 5년 데이터
+        # 과거 3년 데이터 (5년 → 3년으로 완화)
         end_date = datetime.now() - timedelta(days=days_offset)
-        start_date = end_date - timedelta(days=365*5)
+        start_date = end_date - timedelta(days=365*3)
         
         df = yf.download(
             yf_ticker, 
@@ -287,7 +337,7 @@ def get_fractal_statistics(yf_ticker, similarity_threshold=0.90, tail_threshold=
             progress=False
         )
         
-        if len(df) < 60:  # 최소 60일 필요 (14+14+여유)
+        if len(df) < 50:  # 최소 50일로 완화 (60 → 50)
             return None
         
         closes = df['Close'].values
@@ -299,7 +349,7 @@ def get_fractal_statistics(yf_ticker, similarity_threshold=0.90, tail_threshold=
         current_window = closes[-14:]
         
         # zscore 안전 계산
-        if np.std(current_window) == 0:
+        if np.std(current_window) < 0.01:  # 거의 변화 없는 경우
             return None
         
         current_z = zscore(current_window)
@@ -310,24 +360,31 @@ def get_fractal_statistics(yf_ticker, similarity_threshold=0.90, tail_threshold=
         for i in range(len(closes) - 28):  # 14일 + 14일 미래
             past_window = closes[i:i+14]
             
-            if np.std(past_window) == 0:
+            if np.std(past_window) < 0.01:
                 continue
             
-            past_z = zscore(past_window)
+            try:
+                past_z = zscore(past_window)
+            except:
+                continue
             
             # 전체 유사도
             try:
                 sim_full = 1 - cosine(current_z, past_z)
+                if np.isnan(sim_full):
+                    continue
             except:
                 continue
             
             # 후반 3일 유사도
             try:
                 sim_tail = 1 - cosine(current_z[-3:], past_z[-3:])
+                if np.isnan(sim_tail):
+                    sim_tail = 0
             except:
                 sim_tail = 0
             
-            # 필터링
+            # 필터링 (기본 85%/90%로 완화)
             if sim_full < similarity_threshold or sim_tail < tail_threshold:
                 continue
             
@@ -375,19 +432,24 @@ def get_fractal_statistics(yf_ticker, similarity_threshold=0.90, tail_threshold=
         return None
 
 
-# --- [백테스팅] ---
-def backtest_prediction(ticker_code, yf_ticker, days_ago=14):
-    """2주 전 검색했다면?"""
+# --- [백테스팅] (10일로 완화) ---
+def backtest_prediction(ticker_code, yf_ticker, days_ago=10):
+    """10일 전 검색했다면?"""
     try:
-        # 2주 전 데이터
+        # 10일 전 데이터
         past_data = get_stock_data(ticker_code, yf_ticker, days_ago=days_ago)
         past_price = past_data["price"]
         
         if past_price == 0:
             return None
         
-        # 2주 전 프랙탈 분석
-        past_fractal = get_fractal_statistics(yf_ticker, days_offset=days_ago)
+        # 10일 전 프랙탈 분석 (완화된 조건)
+        past_fractal = get_fractal_statistics(
+            yf_ticker, 
+            similarity_threshold=0.80,  # 80%로 완화
+            tail_threshold=0.85,  # 85%로 완화
+            days_offset=days_ago
+        )
         
         if not past_fractal:
             return None
@@ -464,36 +526,36 @@ st.set_page_config(
 )
 
 st.title("📈 AI 주식 팩트 스캐너")
-st.caption("개별 뉴스 호재/악재 분석 + 2주(14일) 차트 패턴 기반 백테스팅")
+st.caption("명확한 호재/악재 분석 + 2주(14일) 차트 패턴 기반 백테스팅")
 
 # --- 사이드바 ---
 with st.sidebar:
     st.header("📌 사용 방법")
     st.markdown("""
     1️⃣ **종목명 또는 코드 입력** (예: 삼성전자, 005930)
-    2️⃣ **각 뉴스별 호재/악재 AI 분석**
+    2️⃣ **각 뉴스별 호재/악재 명확 분석**
     3️⃣ **과거 14일(2주) 유사 차트 패턴 검색**
-    4️⃣ **2주 전 백테스팅 결과** 확인
+    4️⃣ **10일 전 백테스팅 결과** 확인
     """)
     
     st.divider()
     
-    # 유사도 슬라이더
+    # 유사도 슬라이더 (기본값 낮춤)
     st.subheader("🎚️ 프랙탈 분석 설정")
     similarity_threshold = st.slider(
         "전체 유사도",
-        min_value=85,
+        min_value=75,
         max_value=95,
-        value=90,
+        value=85,  # 90 → 85로 낮춤
         step=1,
         help="과거 14일 차트와 현재 14일 차트의 전체 유사도"
     )
     
     tail_threshold = st.slider(
         "후반 유사도",
-        min_value=85,
+        min_value=80,
         max_value=98,
-        value=95,
+        value=90,  # 95 → 90으로 낮춤
         step=1,
         help="최근 3일 차트 패턴의 유사도 (더 정밀)"
     )
@@ -508,7 +570,7 @@ with st.sidebar:
 # --- 메인 영역 ---
 user_input = st.text_input(
     "🔍 종목명 또는 코드 입력",
-    placeholder="예: 삼성전자, 005930, 키움증권",
+    placeholder="예: 삼성전자, 005930, LG화학",
     key="stock_input"
 )
 
@@ -550,16 +612,16 @@ if user_input:
     st.divider()
     
     # --- 백테스팅 ---
-    st.subheader("⏮️ 2주 전(14일 전) 검색했다면?")
+    st.subheader("⏮️ 10일 전 검색했다면?")
     
     with st.spinner("백테스팅 분석 중..."):
-        backtest = backtest_prediction(ticker_code, yf_ticker, days_ago=14)
+        backtest = backtest_prediction(ticker_code, yf_ticker, days_ago=10)
     
     if backtest:
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric("2주 전 가격", f"{backtest['past_price']:,}원")
+            st.metric("10일 전 가격", f"{backtest['past_price']:,}원")
         
         with col2:
             st.metric("AI 예측 가격", f"{backtest['predicted_price']:,}원", 
@@ -585,12 +647,12 @@ if user_input:
             st.metric("예측 정확도", f"{accuracy:.1f}% {star}")
             st.caption(f"{direction} 방향 {'적중' if backtest['direction_match'] else '불일치'}")
     else:
-        st.info("💡 백테스팅 데이터가 부족합니다. (최소 2주 이상의 거래 데이터 필요)")
+        st.info("💡 백테스팅 데이터가 부족합니다. 최근 상장되었거나 거래가 적은 종목일 수 있습니다.")
     
     st.divider()
     
     # --- 뉴스 + AI 분석 ---
-    st.subheader("📰 최신 뉴스 개별 호재/악재 분석")
+    st.subheader("📰 최신 뉴스 호재/악재 명확 분석")
     
     with st.spinner("뉴스 수집 및 각 뉴스별 AI 분석 중..."):
         news_data = get_news_data(company_name)
@@ -643,13 +705,10 @@ if user_input:
             # 감성에 따른 이모지
             if sentiment == "호재":
                 emoji = "🟢"
-                color = "green"
             elif sentiment == "악재":
                 emoji = "🔴"
-                color = "red"
             else:
                 emoji = "🟡"
-                color = "orange"
             
             with st.expander(f"{emoji} **{sentiment}** ({s_score}점) | {news['title'][:60]}..."):
                 st.markdown(f"**분석 근거**: {s_reason}")
@@ -665,7 +724,7 @@ if user_input:
     # --- 프랙탈 분석 ---
     st.subheader("📊 과거 2주(14일) 유사 차트 패턴 분석")
     
-    with st.spinner("과거 5년 데이터 분석 중..."):
+    with st.spinner("과거 3년 데이터 분석 중..."):
         fractal = get_fractal_statistics(
             yf_ticker, 
             similarity_threshold=similarity_threshold/100, 
@@ -755,8 +814,13 @@ if user_input:
                 st.divider()
     else:
         st.warning(f"⚠️ 유사도 {similarity_threshold}%(전체), {tail_threshold}%(후반) 기준으로 유사한 과거 패턴을 찾지 못했습니다.")
-        st.info("💡 사이드바에서 유사도 기준을 낮춰보세요 (85~90%).")
+        st.info("""
+        💡 **해결 방법**:
+        - 사이드바에서 유사도 기준을 낮춰보세요 (75~85%)
+        - 최근 상장되었거나 거래량이 적은 종목일 수 있습니다
+        - 백테스팅 기간은 10일 전으로 완화되어 더 많은 데이터를 찾습니다
+        """)
 
 # --- 푸터 ---
 st.divider()
-st.caption("© 2026 AI 주식 팩트 스캐너 | 개별 뉴스 호재/악재 분석 + 2주(14일) 차트 패턴 기반")
+st.caption("© 2026 AI 주식 팩트 스캐너 | 명확한 호재/악재 분석 + 2주(14일) 차트 패턴 기반")
