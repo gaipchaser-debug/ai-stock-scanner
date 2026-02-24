@@ -596,58 +596,65 @@ st.markdown("---")
 # ========== 개별 종목 검색 ==========
 st.subheader("🔍 개별 종목 분석")
 
-# 검색
-col1, col2 = st.columns([3, 1])
-with col1:
-    query = st.text_input(
-        "종목 검색",
-        placeholder="종목명 또는 코드 (예: 삼성전자, 005930)"
-    )
-with col2:
-    st.markdown("<br>", unsafe_allow_html=True)
-    search_btn = st.button("🔎 검색", type="secondary", use_container_width=True)
+# current_ticker가 설정되어 있으면 바로 분석
+if st.session_state.current_ticker:
+    final_ticker = st.session_state.current_ticker
+    # 세션 초기화 (다음 검색을 위해)
+    st.session_state.current_ticker = None
+else:
+    # 검색
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        query = st.text_input(
+            "종목 검색",
+            placeholder="종목명 또는 코드 (예: 삼성전자, 005930)",
+            key="stock_search_input"
+        )
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        search_btn = st.button("🔎 검색", type="secondary", use_container_width=True)
 
-if not query:
-    st.info("👆 종목을 입력하거나 위의 추천 종목을 확인하세요")
-    with st.expander("💡 검색 가능 종목"):
-        if all_stocks_df is not None:
-            sample = all_stocks_df.head(20)[['Code', 'Name', 'Market']]
-            st.dataframe(sample, use_container_width=True)
-    st.stop()
+    if not query:
+        st.info("👆 종목을 입력하거나 위의 추천 종목을 확인하세요")
+        with st.expander("💡 검색 가능 종목"):
+            if all_stocks_df is not None:
+                sample = all_stocks_df.head(20)[['Code', 'Name', 'Market']]
+                st.dataframe(sample, use_container_width=True)
+        st.stop()
 
-if not search_btn:
-    st.stop()
+    if not search_btn:
+        st.stop()
 
-# 검색 실행
-with st.spinner("🔍 검색 중..."):
-    ticker, matches = search_stock(query, stock_dict, all_stocks_df)
-    
-    if ticker:
-        st.success(f"✅ 발견: {ticker}")
-        final_ticker = ticker
-    
-    elif matches is not None and len(matches) > 0:
-        st.warning(f"⚠️ {len(matches)}개 종목 발견")
+    # 검색 실행
+    with st.spinner("🔍 검색 중..."):
+        ticker, matches = search_stock(query, stock_dict, all_stocks_df)
         
-        for idx, row in matches.iterrows():
-            code = str(row['Code'])
-            name = str(row['Name'])
-            market = str(row['Market'])
-            ticker_code = f"{code}.KS" if market == 'KOSPI' else f"{code}.KQ"
+        if ticker:
+            st.success(f"✅ 발견: {ticker}")
+            final_ticker = ticker
+        
+        elif matches is not None and len(matches) > 0:
+            st.warning(f"⚠️ {len(matches)}개 종목 발견")
             
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.markdown(f"**{name}** ({code}) - {market}")
-            with col2:
-                if st.button("선택", key=f"sel_{idx}", use_container_width=True):
-                    st.session_state.current_ticker = ticker_code
-                    st.rerun()
+            for idx, row in matches.iterrows():
+                code = str(row['Code'])
+                name = str(row['Name'])
+                market = str(row['Market'])
+                ticker_code = f"{code}.KS" if market == 'KOSPI' else f"{code}.KQ"
+                
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.markdown(f"**{name}** ({code}) - {market}")
+                with col2:
+                    if st.button("선택", key=f"sel_{idx}", use_container_width=True):
+                        st.session_state.current_ticker = ticker_code
+                        st.rerun()
+            
+            st.stop()
         
-        st.stop()
-    
-    else:
-        st.error(f"❌ '{query}' 없음")
-        st.stop()
+        else:
+            st.error(f"❌ '{query}' 없음")
+            st.stop()
 
 # 데이터 로드 (상세 분석용)
 st.markdown("---")
@@ -683,6 +690,7 @@ with col3:
     st.metric("데이터", f"{len(hist)}일")
 
 if st.button("🔄 다른 종목 검색"):
+    st.session_state.current_ticker = None
     reset_session()
     st.rerun()
 
