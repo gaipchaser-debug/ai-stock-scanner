@@ -115,67 +115,53 @@ def load_stock_data(ticker, max_retries=3):
     
     return False, None, None, None
 
+def calculate_rsi(data, period=14):
+    """RSI 계산"""
+    delta = data['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
 def create_pattern_reference(pattern_type):
-    """캔들 패턴 참조 이미지 생성"""
+    """캔들 패턴 참조 이미지"""
     fig = go.Figure()
     
     if pattern_type == "Bullish Engulfing":
-        # 하락 캔들 (이전)
         fig.add_trace(go.Candlestick(
-            x=[1],
-            open=[105], high=[110], low=[95], close=[98],
-            name='이전 캔들',
-            increasing_line_color='red',
-            decreasing_line_color='red'
+            x=[1], open=[105], high=[110], low=[95], close=[98],
+            increasing_line_color='red', decreasing_line_color='red'
         ))
-        # 상승 캔들 (현재) - 더 큰 몸통
         fig.add_trace(go.Candlestick(
-            x=[2],
-            open=[97], high=[125], low=[95], close=[123],
-            name='현재 캔들',
-            increasing_line_color='green',
-            decreasing_line_color='green'
+            x=[2], open=[97], high=[125], low=[95], close=[123],
+            increasing_line_color='green', decreasing_line_color='green'
         ))
-        title = "Bullish Engulfing 패턴"
+        title = "Bullish Engulfing (상승 장악형)"
         
     elif pattern_type == "Hammer":
-        # 망치형 캔들
         fig.add_trace(go.Candlestick(
-            x=[1],
-            open=[102], high=[105], low=[85], close=[103],
-            name='망치형',
-            increasing_line_color='green',
-            decreasing_line_color='green'
+            x=[1], open=[102], high=[105], low=[85], close=[103],
+            increasing_line_color='green', decreasing_line_color='green'
         ))
-        title = "Hammer 패턴"
+        title = "Hammer (망치형)"
         
     elif pattern_type == "Bearish Engulfing":
-        # 상승 캔들 (이전)
         fig.add_trace(go.Candlestick(
-            x=[1],
-            open=[95], high=[105], low=[93], close=[102],
-            name='이전 캔들',
-            increasing_line_color='green',
-            decreasing_line_color='green'
+            x=[1], open=[95], high=[105], low=[93], close=[102],
+            increasing_line_color='green', decreasing_line_color='green'
         ))
-        # 하락 캔들 (현재) - 더 큰 몸통
         fig.add_trace(go.Candlestick(
-            x=[2],
-            open=[103], high=[108], low=[80], close=[82],
-            name='현재 캔들',
-            increasing_line_color='red',
-            decreasing_line_color='red'
+            x=[2], open=[103], high=[108], low=[80], close=[82],
+            increasing_line_color='red', decreasing_line_color='red'
         ))
-        title = "Bearish Engulfing 패턴"
+        title = "Bearish Engulfing (하락 장악형)"
     
     else:
-        # 일반 캔들
         fig.add_trace(go.Candlestick(
-            x=[1],
-            open=[100], high=[105], low=[95], close=[102],
-            name='일반 캔들',
-            increasing_line_color='gray',
-            decreasing_line_color='gray'
+            x=[1], open=[100], high=[105], low=[95], close=[102],
+            increasing_line_color='gray', decreasing_line_color='gray'
         ))
         title = "일반 캔들"
     
@@ -215,10 +201,88 @@ def create_actual_candle_chart(hist, num_candles=5):
     
     return fig
 
+def detect_candle_pattern_advanced(hist):
+    """정교한 캔들 패턴 분석 (RSI + 거래량 포함)"""
+    if len(hist) < 15:
+        return "데이터 부족", 50, 0, {}
+    
+    # RSI 계산
+    hist['RSI'] = calculate_rsi(hist, period=14)
+    
+    last = hist.iloc[-1]
+    prev = hist.iloc[-2]
+    
+    last_body = abs(float(last['Close']) - float(last['Open']))
+    prev_body = abs(float(prev['Close']) - float(prev['Open']))
+    
+    # 거래량 비율
+    avg_volume = hist['Volume'].tail(20).mean()
+    volume_ratio = float(last['Volume']) / avg_volume if avg_volume > 0 else 1
+    
+    # RSI
+    current_rsi = float(last['RSI']) if pd.notna(last['RSI']) else 50
+    
+    # 가격 위치 (20일 범위 내)
+    high_20 = hist['Close'].tail(20).max()
+    low_20 = hist['Close'].tail(20).min()
+    price_position = (float(last['Close']) - low_20) / (high_20 - low_20) if high_20 > low_20 else 0.5
+    
+    pattern_details = {
+        'rsi': current_rsi,
+        'volume_ratio': volume_ratio,
+        'price_position': price_position * 100
+    }
+    
+    # === Bullish Engulfing ===
+    if (prev['Close'] < prev['Open'] and 
+        last['Close'] > last['Open'] and 
+        last_body > prev_body * 1.5):
+        
+        # 일치도 계산 (100점 만점)
+        body_score = min(30, (last_body / prev_body) * 10)  # 최대 30점
+        rsi_score = 20 if 30 <= current_rsi <= 50 else 10 if current_rsi < 70 else 0  # RSI 과매도~중립
+        volume_score = min(25, volume_ratio * 12.5)  # 거래량 2배 = 25점
+        position_score = 25 if price_position < 0.5 else 15  # 하단부 = 25점
+        
+        match_score = int(body_score + rsi_score + volume_score + position_score)
+        
+        return "Bullish Engulfing 🟢", 80, match_score, pattern_details
+    
+    # === Hammer ===
+    lower_shadow = min(float(last['Open']), float(last['Close'])) - float(last['Low'])
+    upper_shadow = float(last['High']) - max(float(last['Open']), float(last['Close']))
+    
+    if last_body > 0 and lower_shadow > last_body * 2 and upper_shadow < last_body * 0.5:
+        
+        shadow_score = min(35, (lower_shadow / last_body) * 12)  # 최대 35점
+        rsi_score = 25 if current_rsi < 35 else 15 if current_rsi < 50 else 5
+        volume_score = min(20, volume_ratio * 10)
+        position_score = 20 if price_position < 0.3 else 10
+        
+        match_score = int(shadow_score + rsi_score + volume_score + position_score)
+        
+        return "Hammer 🟢", 75, match_score, pattern_details
+    
+    # === Bearish Engulfing ===
+    if (prev['Close'] > prev['Open'] and 
+        last['Close'] < last['Open'] and 
+        last_body > prev_body * 1.5):
+        
+        body_score = min(30, (last_body / prev_body) * 10)
+        rsi_score = 20 if 50 <= current_rsi <= 70 else 10 if current_rsi > 30 else 0
+        volume_score = min(25, volume_ratio * 12.5)
+        position_score = 25 if price_position > 0.5 else 15
+        
+        match_score = int(body_score + rsi_score + volume_score + position_score)
+        
+        return "Bearish Engulfing 🔴", 20, match_score, pattern_details
+    
+    return "패턴 없음", 50, 0, pattern_details
+
 # ========== UI ==========
 st.title("📊 전문가급 주식 분석 시스템")
-st.markdown("### 🇰🇷 한국 주식 전체 검색 + 캔들 패턴 비교")
-st.markdown("**✅ 코스피 + 코스닥 | ✅ 패턴 일치도 시각화**")
+st.markdown("### 🇰🇷 한국 주식 전체 검색 + AI 기반 4대 모듈 분석")
+st.markdown("**✅ 정교한 패턴 분석 (RSI+거래량) | ✅ 리스크 관리 시각화**")
 st.markdown("---")
 
 # 종목 리스트 로드
@@ -267,7 +331,6 @@ with st.spinner("🔍 검색 중..."):
     
     elif matches is not None and len(matches) > 0:
         st.warning(f"⚠️ {len(matches)}개 종목 발견")
-        st.markdown("### 📋 선택")
         
         for idx, row in matches.iterrows():
             code = str(row['Code'])
@@ -322,7 +385,7 @@ if len(hist) >= 2:
 with col3:
     st.metric("데이터", f"{len(hist)}일")
 
-if st.button("🔄 다시 검색"):
+if st.button("🔄 다른 종목 검색"):
     reset_session()
     st.rerun()
 
@@ -344,41 +407,9 @@ ma20 = float(latest['MA20']) if pd.notna(latest['MA20']) else current_price
 ma60 = float(latest['MA60']) if pd.notna(latest['MA60']) else current_price
 ma120 = float(latest['MA120']) if pd.notna(latest['MA120']) else current_price
 
-def detect_candle_pattern(hist):
-    if len(hist) < 3:
-        return "데이터 부족", 50, 0
-    
-    last = hist.iloc[-1]
-    prev = hist.iloc[-2]
-    
-    last_body = abs(float(last['Close']) - float(last['Open']))
-    prev_body = abs(float(prev['Close']) - float(prev['Open']))
-    
-    # Bullish Engulfing
-    if (prev['Close'] < prev['Open'] and 
-        last['Close'] > last['Open'] and 
-        last_body > prev_body * 1.5):
-        match_score = 90
-        return "Bullish Engulfing 🟢", 80, match_score
-    
-    # Hammer
-    lower_shadow = min(float(last['Open']), float(last['Close'])) - float(last['Low'])
-    upper_shadow = float(last['High']) - max(float(last['Open']), float(last['Close']))
-    if last_body > 0 and lower_shadow > last_body * 2 and upper_shadow < last_body * 0.5:
-        match_score = 85
-        return "Hammer 🟢", 75, match_score
-    
-    # Bearish Engulfing
-    if (prev['Close'] > prev['Open'] and 
-        last['Close'] < last['Open'] and 
-        last_body > prev_body * 1.5):
-        match_score = 90
-        return "Bearish Engulfing 🔴", 20, match_score
-    
-    return "패턴 없음", 50, 0
+candle_pattern, candle_score, pattern_match, pattern_details = detect_candle_pattern_advanced(hist)
 
-candle_pattern, candle_score, pattern_match = detect_candle_pattern(hist)
-
+# 모듈 1 계산
 if pd.notna(ma5) and pd.notna(ma20) and pd.notna(ma60) and pd.notna(ma120):
     if ma5 > ma20 > ma60 > ma120:
         ma_alignment = "정배열 🟢"
@@ -477,15 +508,41 @@ sl_methods = {
 }
 
 final_sl = max(sl_methods.values())
-risk = ((final_sl - current_price) / current_price) * 100
+risk_pct = ((final_sl - current_price) / current_price) * 100
 target = current_price + abs(current_price - final_sl) * 2
-reward = ((target - current_price) / current_price) * 100
+reward_pct = ((target - current_price) / current_price) * 100
 
-# 최종
-final_score = int(module1_score * 0.3 + module2_score * 0.3 + module3_score * 0.4)
+# 모듈 4 점수 계산 (리스크:리워드 비율 기반)
+risk_reward_ratio = abs(reward_pct / risk_pct) if risk_pct != 0 else 0
+
+# 리스크:리워드 비율에 따른 점수 (2.0 이상 = 100점)
+if risk_reward_ratio >= 2.5:
+    module4_score = 95
+elif risk_reward_ratio >= 2.0:
+    module4_score = 85
+elif risk_reward_ratio >= 1.5:
+    module4_score = 70
+elif risk_reward_ratio >= 1.0:
+    module4_score = 50
+else:
+    module4_score = 30
+
+module4_score = int(module4_score)
+
+# **최종 점수 계산 (4개 모듈 모두 포함)**
+final_score = int(module1_score * 0.25 + module2_score * 0.25 + module3_score * 0.25 + module4_score * 0.25)
 
 # ========== 캔들 패턴 비교 ==========
-st.subheader("🕯️ 캔들 패턴 분석 & 비교")
+st.subheader("🕯️ 모듈 1: 추세 & 패턴 인식")
+
+st.info("""
+**📚 모듈 1이란?**  
+주가의 **추세 방향**과 **캔들 패턴**을 분석하여 향후 상승/하락 가능성을 예측합니다.
+
+- **캔들 패턴**: 단기 반전 신호 포착 (Bullish/Bearish Engulfing, Hammer 등)
+- **이동평균 배열**: 장기 추세 확인 (정배열=상승 추세, 역배열=하락 추세)
+- **골든/데드크로스**: 중장기 추세 전환 신호
+""")
 
 col1, col2 = st.columns(2)
 
@@ -507,96 +564,307 @@ with col2:
     actual_fig = create_actual_candle_chart(hist, num_candles=5)
     st.plotly_chart(actual_fig, use_container_width=True)
 
-# 일치도
-st.markdown("### 🎯 패턴 일치도")
-col1, col2, col3 = st.columns(3)
+# 정교한 일치도 표시
+st.markdown("### 🎯 패턴 일치도 분석 (RSI + 거래량 반영)")
+
+col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.metric("감지 패턴", candle_pattern)
 with col2:
-    st.metric("일치도", f"{pattern_match}%")
+    st.metric("종합 일치도", f"{pattern_match}%")
 with col3:
-    if pattern_match >= 80:
-        st.success("✅ 강한 신호")
-    elif pattern_match >= 60:
-        st.warning("⚠️ 중간 신호")
-    else:
-        st.info("ℹ️ 약한 신호")
+    st.metric("RSI", f"{pattern_details.get('rsi', 50):.1f}")
+with col4:
+    st.metric("거래량 배율", f"{pattern_details.get('volume_ratio', 1):.2f}배")
+
+# 일치도 세부 점수
+with st.expander("📊 일치도 상세 분석"):
+    st.markdown(f"""
+    **패턴 일치도 계산 방식** (100점 만점)
+    
+    - **캔들 형태**: 몸통 크기, 그림자 비율 등 (최대 30~35점)
+    - **RSI 지표**: 과매수/과매도 영역 확인 (최대 20~25점)
+    - **거래량**: 평균 대비 배율 (최대 20~25점)
+    - **가격 위치**: 20일 범위 내 상대적 위치 (최대 20~25점)
+    
+    **현재 종목**
+    - RSI: {pattern_details.get('rsi', 50):.1f} {'(과매도)' if pattern_details.get('rsi', 50) < 30 else '(과매수)' if pattern_details.get('rsi', 50) > 70 else '(중립)'}
+    - 거래량 배율: {pattern_details.get('volume_ratio', 1):.2f}배
+    - 가격 위치: {pattern_details.get('price_position', 50):.1f}% {'(하단부)' if pattern_details.get('price_position', 50) < 30 else '(상단부)' if pattern_details.get('price_position', 50) > 70 else '(중간)'}
+    """)
+
+if pattern_match >= 80:
+    st.success("✅ **강한 신호**: 패턴이 매우 명확하며, RSI와 거래량도 뒷받침합니다.")
+elif pattern_match >= 60:
+    st.warning("⚠️ **중간 신호**: 패턴은 인식되나 일부 조건이 약합니다.")
+else:
+    st.info("ℹ️ **약한 신호**: 패턴이 불명확하거나 보조 지표가 부족합니다.")
+
+# 모듈 1 점수
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric("캔들 패턴", f"{candle_score}점", candle_pattern)
+with col2:
+    st.metric("이동평균", f"{ma_score}점", ma_alignment)
+with col3:
+    st.metric("크로스", f"{cross_score}점", cross)
+
+st.success(f"**📊 모듈1 종합: {module1_score}점**")
+
+st.markdown("---")
+
+# ========== 모듈 2 ==========
+st.subheader("📊 모듈 2: 거래량 & 공급 검증")
+
+st.info("""
+**📊 모듈 2란?**  
+**거래량**을 분석하여 가격 움직임의 **신뢰도**를 검증합니다.
+
+- **거래량 급증**: 평균 대비 2배 이상 = 강한 매수/매도 세력 유입
+- **거래량 감소**: 조정 시 거래량 감소 = 건전한 조정 (긍정)
+- **유동성 검증**: 일평균 거래대금이 충분한지 확인
+""")
+
+col1, col2 = st.columns(2)
+with col1:
+    st.metric("거래량 배율", f"{volume_ratio:.2f}배", breakout)
+with col2:
+    st.metric("모듈2 점수", f"{module2_score}점")
+
+# 거래량 차트
+fig_volume = go.Figure()
+fig_volume.add_trace(go.Bar(
+    x=hist.index[-20:],
+    y=hist['Volume'].tail(20),
+    name='거래량',
+    marker_color='lightblue'
+))
+fig_volume.add_trace(go.Scatter(
+    x=hist.index[-20:],
+    y=hist['Volume_MA20'].tail(20),
+    name='20일 평균',
+    line=dict(color='red', width=2)
+))
+fig_volume.update_layout(
+    title="최근 20일 거래량 추이",
+    xaxis_title="날짜",
+    yaxis_title="거래량",
+    height=400
+)
+st.plotly_chart(fig_volume, use_container_width=True)
+
+st.success(f"**📊 모듈2 종합: {module2_score}점**")
+
+st.markdown("---")
+
+# ========== 모듈 3 ==========
+st.subheader("🎯 모듈 3: 매수 신호 (4-AND 조건)")
+
+st.info("""
+**🎯 모듈 3이란?**  
+**4가지 핵심 조건**을 모두 충족해야 강력한 매수 신호로 판단합니다.
+
+1. **120일선 상회**: 중장기 상승 추세 확인
+2. **20일 신고가**: 단기 모멘텀 확보
+3. **최적 상승폭 (5~15%)**: 과열되지 않은 건전한 상승
+4. **거래량 급증 (2배↑)**: 강한 매수 세력 유입
+""")
+
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    st.metric("120일선 상회", "✅" if cond1 else "❌")
+with col2:
+    st.metric("20일 신고가", "✅" if cond2 else "❌")
+with col3:
+    st.metric("최적 상승폭", "✅" if cond3 else "❌")
+with col4:
+    st.metric("거래량 급증", "✅" if cond4 else "❌")
+
+if satisfied == 4:
+    st.success("🎉 **4개 조건 모두 충족**: 강력 매수 신호")
+elif satisfied == 3:
+    st.warning("⚠️ **3개 조건 충족**: 신중 매수 검토")
+elif satisfied >= 2:
+    st.info("ℹ️ **2개 이하 충족**: 관망 권장")
+else:
+    st.error("❌ **조건 미달**: 매수 부적합")
+
+st.success(f"**📊 모듈3 종합: {module3_score}점** (충족: {satisfied}/4)")
+
+st.markdown("---")
+
+# ========== 모듈 4 (개선된 시각화) ==========
+st.subheader("🛡️ 모듈 4: 리스크 & 수익 관리")
+
+st.info("""
+**🛡️ 모듈 4란?**  
+투자 시 **손실을 제한**하고 **수익을 극대화**하기 위한 **진입/청산 가격**을 제시합니다.
+
+- **손절가**: 손실을 제한하는 최저 가격 (-3%~-5%)
+- **목표가**: 기대 수익 가격 (리스크의 2배)
+- **리스크:리워드 = 1:2**: 손실 1만큼 위험 감수 시, 수익 2를 기대
+
+**점수 기준**:
+- 리스크:리워드 비율 2.5 이상 = 95점
+- 2.0~2.5 = 85점
+- 1.5~2.0 = 70점
+- 1.0~1.5 = 50점
+- 1.0 미만 = 30점
+""")
+
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    st.metric("💼 진입가", f"{current_price:,.0f}원", "현재가")
+with col2:
+    st.metric("🛑 손절가", f"{final_sl:,.0f}원", f"{risk_pct:.2f}%")
+with col3:
+    st.metric("🎯 목표가", f"{target:,.0f}원", f"+{reward_pct:.2f}%")
+with col4:
+    st.metric("📊 모듈4 점수", f"{module4_score}점", f"비율 {risk_reward_ratio:.2f}:1")
+
+st.markdown(f"""
+**리스크:리워드 비율**: {risk_reward_ratio:.2f}:1  
+(손실 {abs(risk_pct):.1f}% 위험 → 수익 {reward_pct:.1f}% 기대)
+""")
+
+# 리스크 리워드 시각화 (게이지)
+fig_rr = go.Figure(go.Indicator(
+    mode="gauge+number+delta",
+    value=risk_reward_ratio,
+    title={'text': "리스크:리워드 비율", 'font': {'size': 20}},
+    delta={'reference': 2.0, 'valueformat': '.2f'},
+    number={'suffix': ":1", 'font': {'size': 40}},
+    gauge={
+        'axis': {'range': [0, 4]},
+        'bar': {'color': "darkgreen" if risk_reward_ratio >= 2.0 else "orange" if risk_reward_ratio >= 1.5 else "red"},
+        'steps': [
+            {'range': [0, 1.5], 'color': 'rgba(255,0,0,0.2)'},
+            {'range': [1.5, 2.0], 'color': 'rgba(255,255,0,0.2)'},
+            {'range': [2.0, 4], 'color': 'rgba(0,255,0,0.2)'}
+        ],
+        'threshold': {
+            'line': {'color': "green", 'width': 4},
+            'thickness': 0.75,
+            'value': 2.0
+        }
+    }
+))
+fig_rr.update_layout(height=350)
+st.plotly_chart(fig_rr, use_container_width=True)
+
+# 손익 시뮬레이션 차트
+st.markdown("### 📈 가격별 손익 시뮬레이션")
+
+price_range = np.linspace(final_sl * 0.95, target * 1.05, 100)
+profit_loss = [(p - current_price) / current_price * 100 for p in price_range]
+
+fig_sim = go.Figure()
+
+# 손익 영역 채우기
+fig_sim.add_trace(go.Scatter(
+    x=price_range,
+    y=profit_loss,
+    mode='lines',
+    fill='tozeroy',
+    fillcolor='rgba(0,176,240,0.2)',
+    line=dict(color='blue', width=3),
+    name='손익률'
+))
+
+# 기준선들
+fig_sim.add_vline(x=current_price, line_dash="solid", line_color="black", 
+                  annotation_text="진입가", annotation_position="top")
+fig_sim.add_vline(x=final_sl, line_dash="dash", line_color="red", 
+                  annotation_text=f"손절가 ({risk_pct:.1f}%)", annotation_position="bottom left")
+fig_sim.add_vline(x=target, line_dash="dash", line_color="green", 
+                  annotation_text=f"목표가 (+{reward_pct:.1f}%)", annotation_position="top right")
+fig_sim.add_hline(y=0, line_dash="solid", line_color="gray", line_width=1)
+
+# 손익 영역 표시
+fig_sim.add_hrect(y0=risk_pct, y1=0, fillcolor="red", opacity=0.1, 
+                  annotation_text="손실 영역", annotation_position="inside left")
+fig_sim.add_hrect(y0=0, y1=reward_pct, fillcolor="green", opacity=0.1, 
+                  annotation_text="수익 영역", annotation_position="inside right")
+
+fig_sim.update_layout(
+    title="주가 변동에 따른 손익률",
+    xaxis_title="주가 (원)",
+    yaxis_title="손익률 (%)",
+    height=500,
+    showlegend=False
+)
+
+st.plotly_chart(fig_sim, use_container_width=True)
+
+# 손절가 계산 방법
+with st.expander("📊 손절가 계산 방법"):
+    st.markdown(f"""
+    **5가지 방법 중 가장 높은 값 선택** (안전 우선)
+    
+    1. 진입 캔들 시가: {sl_methods['open']:,.0f}원
+    2. 진입 캔들 저가: {sl_methods['low']:,.0f}원
+    3. 현재가 -3%: {sl_methods['3pct']:,.0f}원
+    4. 현재가 -5%: {sl_methods['5pct']:,.0f}원
+    5. 20일 이동평균: {sl_methods['ma20']:,.0f}원
+    
+    **최종 손절가**: {final_sl:,.0f}원 (가장 보수적)
+    """)
+
+st.success(f"**📊 모듈4 종합: {module4_score}점** (리스크:리워드 {risk_reward_ratio:.2f}:1)")
 
 st.markdown("---")
 
 # ========== 4대 모듈 게이지 ==========
-st.subheader("📊 4대 모듈 분석")
+st.subheader("📊 4대 모듈 종합 점수")
 
 fig_modules = make_subplots(
     rows=2, cols=2,
     specs=[[{'type': 'indicator'}, {'type': 'indicator'}],
            [{'type': 'indicator'}, {'type': 'indicator'}]],
-    subplot_titles=("모듈1: 추세&패턴", "모듈2: 거래량", "모듈3: 매수신호", "모듈4: 리스크")
+    subplot_titles=("모듈1: 추세&패턴", "모듈2: 거래량", "모듈3: 매수신호", "모듈4: 리스크 관리")
 )
 
-fig_modules.add_trace(go.Indicator(
-    mode="gauge+number",
-    value=module1_score,
-    title={'text': f"{module1_score}점"},
-    gauge={
-        'axis': {'range': [0, 100]},
-        'bar': {'color': "darkblue"},
-        'steps': [
-            {'range': [0, 55], 'color': "lightgray"},
-            {'range': [55, 75], 'color': "yellow"},
-            {'range': [75, 100], 'color': "lightgreen"}
-        ]
-    }
-), row=1, col=1)
+for i, (score, row, col, color) in enumerate([
+    (module1_score, 1, 1, "darkblue"),
+    (module2_score, 1, 2, "darkorange"),
+    (module3_score, 2, 1, "darkgreen"),
+    (module4_score, 2, 2, "darkviolet")
+]):
+    fig_modules.add_trace(go.Indicator(
+        mode="gauge+number",
+        value=score,
+        title={'text': f"{score}점"},
+        gauge={
+            'axis': {'range': [0, 100]},
+            'bar': {'color': color},
+            'steps': [
+                {'range': [0, 55], 'color': "lightgray"},
+                {'range': [55, 75], 'color': "yellow"},
+                {'range': [75, 100], 'color': "lightgreen"}
+            ],
+            'threshold': {
+                'line': {'color': "red", 'width': 4},
+                'thickness': 0.75,
+                'value': 75
+            }
+        }
+    ), row=row, col=col)
 
-fig_modules.add_trace(go.Indicator(
-    mode="gauge+number",
-    value=module2_score,
-    title={'text': f"{module2_score}점"},
-    gauge={
-        'axis': {'range': [0, 100]},
-        'bar': {'color': "darkorange"},
-        'steps': [
-            {'range': [0, 55], 'color': "lightgray"},
-            {'range': [55, 75], 'color': "yellow"},
-            {'range': [75, 100], 'color': "lightgreen"}
-        ]
-    }
-), row=1, col=2)
-
-fig_modules.add_trace(go.Indicator(
-    mode="gauge+number",
-    value=module3_score,
-    title={'text': f"{module3_score}점"},
-    gauge={
-        'axis': {'range': [0, 100]},
-        'bar': {'color': "darkgreen"},
-        'steps': [
-            {'range': [0, 55], 'color': "lightgray"},
-            {'range': [55, 75], 'color': "yellow"},
-            {'range': [75, 100], 'color': "lightgreen"}
-        ]
-    }
-), row=2, col=1)
-
-fig_modules.add_trace(go.Indicator(
-    mode="number",
-    value=100,
-    title={'text': "완료"},
-), row=2, col=2)
-
-fig_modules.update_layout(height=600, showlegend=False)
+fig_modules.update_layout(height=600, showlegend=False,
+                         title_text="75점 이상: 강력 매수 | 55~74점: 신중 매수 | 55점 미만: 부적합")
 st.plotly_chart(fig_modules, use_container_width=True)
 
 st.markdown("---")
 
 # ========== 최종 평가 ==========
-st.header("🏆 최종 평가")
+st.header("🏆 최종 종합 평가")
 
 fig_final = go.Figure(go.Indicator(
-    mode="gauge+number",
+    mode="gauge+number+delta",
     value=final_score,
-    title={'text': "최종 점수"},
+    title={'text': "최종 점수", 'font': {'size': 24}},
+    delta={'reference': 75, 'font': {'size': 20}},
+    number={'font': {'size': 60}},
     gauge={
         'axis': {'range': [0, 100]},
         'bar': {'color': "darkblue" if final_score >= 75 else "orange" if final_score >= 55 else "red"},
@@ -604,7 +872,12 @@ fig_final = go.Figure(go.Indicator(
             {'range': [0, 55], 'color': 'rgba(255,0,0,0.2)'},
             {'range': [55, 75], 'color': 'rgba(255,255,0,0.2)'},
             {'range': [75, 100], 'color': 'rgba(0,255,0,0.2)'}
-        ]
+        ],
+        'threshold': {
+            'line': {'color': "red", 'width': 4},
+            'thickness': 0.75,
+            'value': 75
+        }
     }
 ))
 
@@ -612,30 +885,39 @@ fig_final.update_layout(height=400)
 st.plotly_chart(fig_final, use_container_width=True)
 
 if final_score >= 75:
-    st.success("### 🟢 강력 매수")
+    st.success("### 🟢 강력 매수 추천")
+    st.markdown("**모든 지표가 긍정적입니다. 적극적인 매수를 고려하세요.**")
 elif final_score >= 55:
     st.warning("### 🟡 신중 매수")
+    st.markdown("**일부 지표가 긍정적입니다. 리스크 관리를 철저히 하세요.**")
 else:
-    st.error("### 🔴 부적합")
+    st.error("### 🔴 매수 부적합")
+    st.markdown("**현재 매수 시점이 아닙니다. 관망을 권장합니다.**")
 
 # 기여도
-st.markdown("### 📊 기여도")
+st.markdown("### 📊 모듈별 기여도")
 contrib_df = pd.DataFrame({
-    '모듈': ['모듈1', '모듈2', '모듈3'],
-    '점수': [module1_score, module2_score, module3_score],
-    '가중치': ['30%', '30%', '40%'],
+    '모듈': ['모듈1: 추세&패턴', '모듈2: 거래량', '모듈3: 매수신호', '모듈4: 리스크 관리'],
+    '점수': [module1_score, module2_score, module3_score, module4_score],
+    '가중치': ['25%', '25%', '25%', '25%'],
     '기여도': [
-        f"{module1_score * 0.3:.1f}",
-        f"{module2_score * 0.3:.1f}",
-        f"{module3_score * 0.4:.1f}"
+        f"{module1_score * 0.25:.1f}점",
+        f"{module2_score * 0.25:.1f}점",
+        f"{module3_score * 0.25:.1f}점",
+        f"{module4_score * 0.25:.1f}점"
     ]
 })
 st.dataframe(contrib_df, use_container_width=True)
 
+st.markdown(f"""
+**최종 점수 계산식**:  
+({module1_score} × 0.25) + ({module2_score} × 0.25) + ({module3_score} × 0.25) + ({module4_score} × 0.25) = **{final_score}점**
+""")
+
 st.markdown("---")
 
-# ========== 차트 ==========
-st.subheader("📊 가격 차트")
+# ========== 가격 차트 ==========
+st.subheader("📊 기술적 분석 차트")
 
 fig = go.Figure()
 
@@ -649,21 +931,38 @@ fig.add_trace(go.Candlestick(
 ))
 
 if pd.notna(hist['MA5']).any():
-    fig.add_trace(go.Scatter(x=hist.index, y=hist['MA5'], mode='lines', name='MA5', line=dict(color='orange', width=1)))
+    fig.add_trace(go.Scatter(x=hist.index, y=hist['MA5'], mode='lines', 
+                             name='MA5', line=dict(color='orange', width=1)))
 if pd.notna(hist['MA20']).any():
-    fig.add_trace(go.Scatter(x=hist.index, y=hist['MA20'], mode='lines', name='MA20', line=dict(color='blue', width=1)))
+    fig.add_trace(go.Scatter(x=hist.index, y=hist['MA20'], mode='lines', 
+                             name='MA20', line=dict(color='blue', width=2)))
+if pd.notna(hist['MA60']).any():
+    fig.add_trace(go.Scatter(x=hist.index, y=hist['MA60'], mode='lines', 
+                             name='MA60', line=dict(color='green', width=2)))
+if pd.notna(hist['MA120']).any():
+    fig.add_trace(go.Scatter(x=hist.index, y=hist['MA120'], mode='lines', 
+                             name='MA120', line=dict(color='red', width=2)))
 
-fig.add_hline(y=target, line_dash="dot", line_color="green", annotation_text=f"목표: {target:,.0f}")
-fig.add_hline(y=final_sl, line_dash="dot", line_color="red", annotation_text=f"손절: {final_sl:,.0f}")
+fig.add_hline(y=target, line_dash="dot", line_color="green", 
+              annotation_text=f"목표가 {target:,.0f}원", annotation_position="right")
+fig.add_hline(y=final_sl, line_dash="dot", line_color="red", 
+              annotation_text=f"손절가 {final_sl:,.0f}원", annotation_position="right")
 
 fig.update_layout(
-    title=company_name,
+    title=f"{company_name} ({final_ticker}) 기술적 분석",
     xaxis_title="날짜",
-    yaxis_title="가격",
+    yaxis_title="가격 (원)",
     height=600,
     xaxis_rangeslider_visible=False
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
-st.caption("🔔 참고용입니다.")
+st.markdown("---")
+st.markdown("### ✅ 분석 완료")
+st.info("""
+**📌 주의사항**
+- 이 분석은 참고용이며 투자 권유가 아닙니다.
+- 실제 투자 시 본인의 판단과 책임하에 결정하세요.
+- 손절가를 반드시 설정하고 리스크를 관리하세요.
+""")
