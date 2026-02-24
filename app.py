@@ -55,11 +55,14 @@ def get_stock_data(ticker_code, yf_ticker, days_ago=0):
                 end_date = datetime.now() - timedelta(days=days_ago)
                 start_date = end_date - timedelta(days=30)
                 
-                df = fdr.DataReader(ticker_code, start=start_date.strftime('%Y-%m-%d'))
+                # ✅ end 파라미터 추가 (days_ago 반영)
+                df = fdr.DataReader(ticker_code, 
+                                   start=start_date.strftime('%Y-%m-%d'),
+                                   end=end_date.strftime('%Y-%m-%d'))
                 
                 if not df.empty:
                     current_price = int(df['Close'].iloc[-1])
-                    last_date = df.index[-1].strftime('%Y-%m-%d %H:%M')
+                    last_date = df.index[-1].strftime('%Y-%m-%d')
                     
                     return {
                         "price": current_price,
