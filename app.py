@@ -1389,6 +1389,103 @@ with tab2:
         )
         st.plotly_chart(fig_compare, use_container_width=True)
 
+        # ── 2개월 하락장 방어율 분석 (Tab2 추천 종목) ──────────────────
+        st.markdown("---")
+        st.markdown("### 🛡️ 2개월 하락장 방어율 분석")
+        st.caption(
+            "코스피가 하락한 날 중, 추천 종목들이 코스피보다 선방(덜 하락 또는 오히려 상승)한 날의 비율입니다. "
+            "높을수록 하락장에 강한 '알짜배기 주식'입니다."
+        )
+
+        with st.spinner("📊 2개월 방어율 계산 중... (종목당 약 1초)"):
+            tab2_defense_rows = []
+            for _, drow in res_df.iterrows():
+                dticker2 = drow['ticker']
+                dname2   = drow['name']
+                dr2 = get_defense_rate(dticker2, period="2mo")
+                if dr2['total_down_days'] > 0:
+                    if dr2['defense_rate'] >= 70:
+                        dgrade2 = "⭐⭐⭐ 최강 방어"
+                    elif dr2['defense_rate'] >= 55:
+                        dgrade2 = "⭐⭐ 강한 방어"
+                    elif dr2['defense_rate'] >= 40:
+                        dgrade2 = "⭐ 보통"
+                    else:
+                        dgrade2 = "🔴 취약"
+                    tab2_defense_rows.append({
+                        "종목명":       dname2,
+                        "코스피하락일": dr2['total_down_days'],
+                        "방어성공일":   dr2['defense_days'],
+                        "방어율(%)":    dr2['defense_rate'],
+                        "역주행일":     dr2['reverse_days'],
+                        "역주행율(%)":  dr2['reverse_rate'],
+                        "평균초과(%p)": dr2['avg_gap_down'],
+                        "방어등급":     dgrade2,
+                    })
+
+        if tab2_defense_rows:
+            tab2_def_df = pd.DataFrame(tab2_defense_rows).sort_values("방어율(%)", ascending=False)
+
+            def color_defense_tab2(val):
+                try:
+                    v = float(val)
+                    if v >= 70:   return 'background-color:#d4edda; color:#155724; font-weight:bold'
+                    elif v >= 55: return 'background-color:#d1ecf1; color:#0c5460; font-weight:bold'
+                    elif v >= 40: return 'background-color:#fff3cd; color:#856404'
+                    else:         return 'background-color:#f8d7da; color:#721c24'
+                except:
+                    return ''
+
+            tab2_def_styled = tab2_def_df.style.applymap(color_defense_tab2, subset=["방어율(%)"])
+            st.dataframe(tab2_def_styled, use_container_width=True)
+
+            fig_def2 = go.Figure()
+            fig_def2.add_trace(go.Bar(
+                y=tab2_def_df["종목명"],
+                x=tab2_def_df["방어율(%)"],
+                orientation='h',
+                name="방어율(코스피 선방)",
+                marker_color=[
+                    "#28a745" if v >= 70 else "#17a2b8" if v >= 55 else "#ffc107" if v >= 40 else "#dc3545"
+                    for v in tab2_def_df["방어율(%)"]
+                ],
+                text=[f"{v:.1f}%" for v in tab2_def_df["방어율(%)"]],
+                textposition='outside',
+            ))
+            fig_def2.add_trace(go.Bar(
+                y=tab2_def_df["종목명"],
+                x=tab2_def_df["역주행율(%)"],
+                orientation='h',
+                name="역주행율(코스피↓ + 종목↑)",
+                marker_color="gold",
+                text=[f"{v:.1f}%" for v in tab2_def_df["역주행율(%)"]],
+                textposition='outside',
+                visible='legendonly'
+            ))
+            fig_def2.add_vline(x=50, line_dash="dash", line_color="gray",
+                               annotation_text="50% 기준선", annotation_position="top")
+            fig_def2.update_layout(
+                title="추천 종목 2개월 코스피 하락일 방어율 비교",
+                xaxis_title="방어율 (%)",
+                xaxis=dict(range=[0, 115]),
+                height=max(350, len(tab2_def_df) * 30),
+                barmode='overlay',
+                legend=dict(orientation='h', yanchor='bottom', y=1.02),
+            )
+            st.plotly_chart(fig_def2, use_container_width=True)
+
+            st.info("""
+**📌 방어율 해석 가이드**
+- **방어율**: 코스피 하락일 중 해당 종목이 코스피보다 선방(덜 떨어지거나 오히려 상승)한 비율  
+- **역주행율**: 코스피 하락일 중 해당 종목이 아예 상승한 비율 (더 희귀하고 더 가치 있음)  
+- ⭐⭐⭐ **70% 이상**: 최강 방어주 — 하락장에서도 굳건한 진짜 알짜배기  
+- ⭐⭐ **55~69%**: 강한 방어주 — 시장보다 확실히 강함  
+- ⭐ **40~54%**: 보통 — 시장 평균 수준  
+- 🔴 **40% 미만**: 취약 — 하락장에서 시장보다 더 떨어지는 경향  
+            """)
+        else:
+            st.warning("⚠️ 방어율 데이터를 가져올 수 없습니다.")
+
         # ── 초기화 버튼 ──────────────────────────────────────────────
         if st.button("🔄 다시 검색", key="scan_reset_btn"):
             st.session_state.scan_mode = None
@@ -1953,6 +2050,95 @@ with tab3:
         """)
     else:
         st.warning("⚠️ Tab 1(시장 레이더)에서 스캔을 먼저 실행하시면 M5 점수가 추가됩니다.")
+
+    st.markdown("---")
+
+    # ── 2개월 하락장 방어율 분석 (Tab3 개별 종목) ──────────────────
+    st.markdown("### 🛡️ 2개월 하락장 방어율 분석")
+    st.caption(
+        "코스피가 하락한 날 중, 이 종목이 코스피보다 선방(덜 하락 또는 오히려 상승)한 날의 비율입니다. "
+        "높을수록 하락장에 강한 '알짜배기 주식'입니다."
+    )
+
+    with st.spinner("📊 2개월 방어율 계산 중..."):
+        dr_tab3 = get_defense_rate(final_ticker, period="2mo")
+
+    if dr_tab3['total_down_days'] > 0:
+        dr3_defense_rate  = dr_tab3['defense_rate']
+        dr3_reverse_rate  = dr_tab3['reverse_rate']
+        dr3_total_down    = dr_tab3['total_down_days']
+        dr3_defense_days  = dr_tab3['defense_days']
+        dr3_reverse_days  = dr_tab3['reverse_days']
+        dr3_avg_gap       = dr_tab3['avg_gap_down']
+
+        if dr3_defense_rate >= 70:
+            dr3_grade = "⭐⭐⭐ 최강 방어주"
+            dr3_color = "success"
+        elif dr3_defense_rate >= 55:
+            dr3_grade = "⭐⭐ 강한 방어주"
+            dr3_color = "info"
+        elif dr3_defense_rate >= 40:
+            dr3_grade = "⭐ 보통"
+            dr3_color = "warning"
+        else:
+            dr3_grade = "🔴 취약"
+            dr3_color = "error"
+
+        # 지표 카드 (4컬럼)
+        dr3_c1, dr3_c2, dr3_c3, dr3_c4 = st.columns(4)
+        dr3_c1.metric("🛡️ 방어율",    f"{dr3_defense_rate:.1f}%",
+                      help="코스피 하락일 중 이 종목이 코스피보다 선방한 비율")
+        dr3_c2.metric("⭐ 역주행율",   f"{dr3_reverse_rate:.1f}%",
+                      help="코스피 하락일 중 이 종목이 아예 상승한 비율")
+        dr3_c3.metric("📅 코스피 하락일", f"{dr3_total_down}일 중 {dr3_defense_days}일 방어")
+        dr3_c4.metric("📊 평균초과(%p)", f"{dr3_avg_gap:+.2f}%p",
+                      help="코스피 하락일에 평균적으로 코스피보다 몇 %p 앞섰는지")
+
+        # 등급 표시
+        getattr(st, dr3_color)(f"### {dr3_grade}")
+
+        # 방어율 게이지 바 차트
+        fig_dr3 = go.Figure()
+        fig_dr3.add_trace(go.Bar(
+            x=["방어율(%)", "역주행율(%)"],
+            y=[dr3_defense_rate, dr3_reverse_rate],
+            marker_color=["#28a745" if dr3_defense_rate >= 70 else "#17a2b8" if dr3_defense_rate >= 55 else "#ffc107" if dr3_defense_rate >= 40 else "#dc3545",
+                          "gold"],
+            text=[f"{dr3_defense_rate:.1f}%", f"{dr3_reverse_rate:.1f}%"],
+            textposition='outside',
+        ))
+        fig_dr3.add_hline(y=50, line_dash="dash", line_color="gray",
+                          annotation_text="50% 기준선", annotation_position="right")
+        fig_dr3.add_hline(y=70, line_dash="dot", line_color="green",
+                          annotation_text="⭐⭐⭐ 최강 70%", annotation_position="right")
+        fig_dr3.update_layout(
+            title=f"{company_name} 2개월 하락장 방어율",
+            yaxis_title="비율 (%)",
+            yaxis=dict(range=[0, 110]),
+            height=320,
+        )
+        st.plotly_chart(fig_dr3, use_container_width=True)
+
+        st.markdown(f"""
+| 항목 | 값 |
+|------|------|
+| 🛡️ 방어율 | **{dr3_defense_rate:.1f}%** ({dr3_defense_days}일 / {dr3_total_down}일) |
+| ⭐ 역주행율 | **{dr3_reverse_rate:.1f}%** ({dr3_reverse_days}일) |
+| 📊 평균 초과수익(%p) | **{dr3_avg_gap:+.2f}%p** |
+| 🏆 방어 등급 | **{dr3_grade}** |
+        """)
+
+        st.info("""
+**📌 방어율 해석 가이드**
+- **방어율**: 코스피 하락일 중 해당 종목이 코스피보다 선방(덜 떨어지거나 오히려 상승)한 비율  
+- **역주행율**: 코스피 하락일 중 해당 종목이 아예 상승한 비율 (더 희귀하고 더 가치 있음)  
+- ⭐⭐⭐ **70% 이상**: 최강 방어주 — 하락장에서도 굳건한 진짜 알짜배기  
+- ⭐⭐ **55~69%**: 강한 방어주 — 시장보다 확실히 강함  
+- ⭐ **40~54%**: 보통 — 시장 평균 수준  
+- 🔴 **40% 미만**: 취약 — 하락장에서 시장보다 더 떨어지는 경향  
+        """)
+    else:
+        st.warning("⚠️ 2개월 방어율 데이터를 불러올 수 없습니다. (데이터 부족 또는 네트워크 오류)")
 
     st.markdown("---")
 
