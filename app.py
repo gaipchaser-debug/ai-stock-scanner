@@ -181,15 +181,11 @@ def calculate_stock_score(hist, current_price):
         if avg_volume > 0:
             volume_ratio = current_volume / avg_volume
             if volume_ratio >= 2.0:
-                volume_score = 90
+                volume_score = 85
             elif volume_ratio >= 1.5:
-                volume_score = 75
-            elif volume_ratio >= 1.2:
                 volume_score = 60
-            elif volume_ratio >= 0.8:
-                volume_score = 45
             else:
-                volume_score = 25
+                volume_score = 30
         else:
             volume_ratio = 0
             volume_score = 50
@@ -212,16 +208,12 @@ def calculate_stock_score(hist, current_price):
         
         satisfied = sum([cond1, cond2, cond3, cond4])
         
-        if satisfied == 4:
-            module3_score = 100
-        elif satisfied == 3:
-            module3_score = 80
-        elif satisfied == 2:
+        if satisfied >= 3:
+            module3_score = 85
+        elif satisfied >= 2:
             module3_score = 60
-        elif satisfied == 1:
-            module3_score = 40
         else:
-            module3_score = 20
+            module3_score = 35
         
         # 모듈 4: 리스크
         sl_methods = {
@@ -596,65 +588,58 @@ st.markdown("---")
 # ========== 개별 종목 검색 ==========
 st.subheader("🔍 개별 종목 분석")
 
-# current_ticker가 설정되어 있으면 바로 분석
-if st.session_state.current_ticker:
-    final_ticker = st.session_state.current_ticker
-    # 세션 초기화 (다음 검색을 위해)
-    st.session_state.current_ticker = None
-else:
-    # 검색
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        query = st.text_input(
-            "종목 검색",
-            placeholder="종목명 또는 코드 (예: 삼성전자, 005930)",
-            key="stock_search_input"
-        )
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        search_btn = st.button("🔎 검색", type="secondary", use_container_width=True)
+# 검색
+col1, col2 = st.columns([3, 1])
+with col1:
+    query = st.text_input(
+        "종목 검색",
+        placeholder="종목명 또는 코드 (예: 삼성전자, 005930)"
+    )
+with col2:
+    st.markdown("<br>", unsafe_allow_html=True)
+    search_btn = st.button("🔎 검색", type="secondary", use_container_width=True)
 
-    if not query:
-        st.info("👆 종목을 입력하거나 위의 추천 종목을 확인하세요")
-        with st.expander("💡 검색 가능 종목"):
-            if all_stocks_df is not None:
-                sample = all_stocks_df.head(20)[['Code', 'Name', 'Market']]
-                st.dataframe(sample, use_container_width=True)
-        st.stop()
+if not query:
+    st.info("👆 종목을 입력하거나 위의 추천 종목을 확인하세요")
+    with st.expander("💡 검색 가능 종목"):
+        if all_stocks_df is not None:
+            sample = all_stocks_df.head(20)[['Code', 'Name', 'Market']]
+            st.dataframe(sample, use_container_width=True)
+    st.stop()
 
-    if not search_btn:
-        st.stop()
+if not search_btn:
+    st.stop()
 
-    # 검색 실행
-    with st.spinner("🔍 검색 중..."):
-        ticker, matches = search_stock(query, stock_dict, all_stocks_df)
+# 검색 실행
+with st.spinner("🔍 검색 중..."):
+    ticker, matches = search_stock(query, stock_dict, all_stocks_df)
+    
+    if ticker:
+        st.success(f"✅ 발견: {ticker}")
+        final_ticker = ticker
+    
+    elif matches is not None and len(matches) > 0:
+        st.warning(f"⚠️ {len(matches)}개 종목 발견")
         
-        if ticker:
-            st.success(f"✅ 발견: {ticker}")
-            final_ticker = ticker
-        
-        elif matches is not None and len(matches) > 0:
-            st.warning(f"⚠️ {len(matches)}개 종목 발견")
+        for idx, row in matches.iterrows():
+            code = str(row['Code'])
+            name = str(row['Name'])
+            market = str(row['Market'])
+            ticker_code = f"{code}.KS" if market == 'KOSPI' else f"{code}.KQ"
             
-            for idx, row in matches.iterrows():
-                code = str(row['Code'])
-                name = str(row['Name'])
-                market = str(row['Market'])
-                ticker_code = f"{code}.KS" if market == 'KOSPI' else f"{code}.KQ"
-                
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    st.markdown(f"**{name}** ({code}) - {market}")
-                with col2:
-                    if st.button("선택", key=f"sel_{idx}", use_container_width=True):
-                        st.session_state.current_ticker = ticker_code
-                        st.rerun()
-            
-            st.stop()
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.markdown(f"**{name}** ({code}) - {market}")
+            with col2:
+                if st.button("선택", key=f"sel_{idx}", use_container_width=True):
+                    st.session_state.current_ticker = ticker_code
+                    st.rerun()
         
-        else:
-            st.error(f"❌ '{query}' 없음")
-            st.stop()
+        st.stop()
+    
+    else:
+        st.error(f"❌ '{query}' 없음")
+        st.stop()
 
 # 데이터 로드 (상세 분석용)
 st.markdown("---")
@@ -690,7 +675,6 @@ with col3:
     st.metric("데이터", f"{len(hist)}일")
 
 if st.button("🔄 다른 종목 검색"):
-    st.session_state.current_ticker = None
     reset_session()
     st.rerun()
 
@@ -766,19 +750,13 @@ if avg_volume > 0:
     
     if volume_ratio >= 2.0:
         breakout = "높음 🟢"
-        volume_score = 90
+        volume_score = 85
     elif volume_ratio >= 1.5:
-        breakout = "중상 🟢"
-        volume_score = 75
-    elif volume_ratio >= 1.2:
         breakout = "중간 🟡"
         volume_score = 60
-    elif volume_ratio >= 0.8:
-        breakout = "보통 🟡"
-        volume_score = 45
     else:
         breakout = "낮음 🔴"
-        volume_score = 25
+        volume_score = 30
 else:
     volume_ratio = 0
     breakout = "부족"
@@ -793,25 +771,21 @@ cond2 = current_price >= high_20d
 
 if len(hist) >= 2:
     pct_chg = ((current_price - float(hist['Close'].iloc[-2])) / float(hist['Close'].iloc[-2])) * 100
-    cond3 = -2 <= pct_chg <= 15  # -2%~+15% 범위로 완화
+    cond3 = 5 <= pct_chg <= 15
 else:
     pct_chg = 0
     cond3 = False
 
-cond4 = volume_ratio >= 1.5  # 1.5배로 완화
+cond4 = volume_ratio >= 2.0
 
 satisfied = sum([cond1, cond2, cond3, cond4])
 
 if satisfied == 4:
-    module3_score = 100
+    module3_score = 95
 elif satisfied == 3:
-    module3_score = 80
-elif satisfied == 2:
-    module3_score = 60
-elif satisfied == 1:
-    module3_score = 40
+    module3_score = 70
 else:
-    module3_score = 20
+    module3_score = 40
 
 # 모듈 4
 sl_methods = {
@@ -908,12 +882,6 @@ st.subheader("📊 모듈 2: 거래량 & 공급 검증")
 st.info("""
 **📊 모듈 2란?**  
 거래량을 분석하여 가격 움직임의 신뢰도를 검증합니다.
-
-- **거래량 급증**: 평균 대비 2배 이상 = 강한 매수/매도 세력 유입
-- **거래량 감소**: 조정 시 거래량 감소 = 건전한 조정 (긍정)
-- **유동성 검증**: 일평균 거래대금이 충분한지 확인
-
-**점수**: 2.0배↑=90점 | 1.5~2.0배=75점 | 1.2~1.5배=60점 | 0.8~1.2배=45점 | 0.8배↓=25점
 """)
 
 col1, col2 = st.columns(2)
@@ -950,14 +918,7 @@ st.subheader("🎯 모듈 3: 매수 신호")
 
 st.info("""
 **🎯 모듈 3이란?**  
-4가지 핵심 조건을 충족하면 강력한 매수 신호로 판단합니다.
-
-1. **120일선 상회**: 중장기 상승 추세 확인
-2. **20일 신고가**: 단기 모멘텀 확보
-3. **최적 변동폭 (-2~15%)**: 과열되지 않은 건전한 상승
-4. **거래량 급증 (1.5배↑)**: 강한 매수 세력 유입
-
-**점수**: 4개=100점 | 3개=80점 | 2개=60점 | 1개=40점 | 0개=20점
+4가지 핵심 조건을 충족해야 강력한 매수 신호로 판단합니다.
 """)
 
 col1, col2, col3, col4 = st.columns(4)
@@ -1055,15 +1016,6 @@ st.markdown("---")
 # 최종 평가
 st.header("🏆 최종 종합 평가")
 
-# 평가 기준 표시
-st.info("""
-**📊 평가 기준**
-
-- 🟢 **75점 이상**: 강력 매수 추천 → 모든 지표가 긍정적, 적극적 매수 고려
-- 🟡 **55~74점**: 신중 매수 → 일부 지표가 긍정적, 리스크 관리 필수
-- 🔴 **55점 미만**: 매수 부적합 → 현재 매수 시점 아님, 관망 권장
-""")
-
 fig_final = go.Figure(go.Indicator(
     mode="gauge+number+delta",
     value=final_score,
@@ -1087,13 +1039,10 @@ st.plotly_chart(fig_final, use_container_width=True)
 
 if final_score >= 75:
     st.success("### 🟢 강력 매수 추천")
-    st.markdown("**모든 지표가 긍정적입니다. 적극적인 매수를 고려하세요.**")
 elif final_score >= 55:
     st.warning("### 🟡 신중 매수")
-    st.markdown("**일부 지표가 긍정적입니다. 리스크 관리를 철저히 하세요.**")
 else:
     st.error("### 🔴 매수 부적합")
-    st.markdown("**현재 매수 시점이 아닙니다. 관망을 권장합니다.**")
 
 # 기여도
 st.markdown("### 📊 모듈별 기여도")
