@@ -793,7 +793,7 @@ with tab1:
     st.subheader("📡 오늘의 시장 레이더")
     st.markdown("""
     > 📌 **어떻게 활용할까요?**  
-    > 코스피가 하락하는 날, 오히려 **상승** 하거나 **딹 떨어지는 종목**이 진짜 알짜배기 주식입니다.  
+    > 코스피가 하락하는 날, 오히려 **상승** 하거나 **덜 떨어지는 종목**이 진짜 알짜배기 주식입니다.  
     > 시잔 1위~50위 종목의 오늘 등락률을 코스피와 비교하여 **매일 관찰 훈련**을 시작하세요.
     """)
 
@@ -874,13 +874,13 @@ with tab1:
         # 필터 탭
         filter_opt = st.radio(
             "포트폴리오 필터",
-            ["전체 보기", "⭐ 얭주행 + ✅ 방어만", "⭐ 얭주행만"],
+            ["전체 보기", "⭐ 역주행 + ✅ 방어만", "⭐ 역주행만"],
             horizontal=True
         )
-        if filter_opt == "⭐ 얭주행 + ✅ 방어만":
-            view_df = radar_df[radar_df['verdict'].str.contains("얭주행|방어")]
-        elif filter_opt == "⭐ 얭주행만":
-            view_df = radar_df[radar_df['verdict'].str.contains("얭주행")]
+        if filter_opt == "⭐ 역주행 + ✅ 방어만":
+            view_df = radar_df[radar_df['verdict'].str.contains("역주행|방어")]
+        elif filter_opt == "⭐ 역주행만":
+            view_df = radar_df[radar_df['verdict'].str.contains("역주행")]
         else:
             view_df = radar_df
 
@@ -897,7 +897,7 @@ with tab1:
         table_df['거래량배율'] = table_df['거래량배율'].apply(lambda x: f"{x:.2f}배")
         st.dataframe(table_df, use_container_width=True, height=450)
 
-        st.markdown("""**등급 설명**: ⭐ 얭주행 = 코스피 하락인데 상승 | ✅ 강한 방어 = 코스피 +1%p 초과 | 🛡️ 방어 = 코스피보다 덜 하락 | ➖ 동행 | 🔴 이탈 = 코스피보다 -1%p 초과 하락""")
+        st.markdown("""**등급 설명**: ⭐ 역주행 = 코스피 하락인데 상승 | ✅ 강한 방어 = 코스피 +1%p 초과 | 🛡️ 방어 = 코스피보다 덜 하락 | ➖ 동행 | 🔴 이탈 = 코스피보다 -1%p 초과 하락""")
 
         st.markdown("---")
 
@@ -907,7 +907,7 @@ with tab1:
         fig_scatter = go.Figure()
 
         colors = {
-            "⭐ 얭주행": "gold",
+            "⭐ 역주행": "gold",
             "✅ 강한 방어": "limegreen",
             "🛡️ 방어": "lightgreen",
             "➖ 동행": "lightgray",
@@ -1039,7 +1039,7 @@ with tab1:
         #### 📚 시장 레이더 활용 가이드
         | 판정 | 의미 | 전력 액션 |
         |------|------|----------|
-        | ⭐ **얭주행** | 코스피 하락인데 상승 | 최우선 관심 종목으로 등록 |
+        | ⭐ **역주행** | 코스피 하락인데 상승 | 최우선 관심 종목으로 등록 |
         | ✅ **강한 방어** | 코스피+1%p 이상 초과 | 관심 종목으로 등록 |
         | 🛡️ **방어** | 코스피보다 덜 하락 | 추세 지속 확인 |
         | ➖ **동행** | 코스피와 유사한 움직임 | 별도 판단 기준 필요 |
@@ -1127,11 +1127,20 @@ with tab2:
         # ── 상세 점수 카드 ────────────────────────────────────────────
         with st.expander("📊 종목별 상세 점수 분석 카드"):
             for i, (_, row) in enumerate(res_df.iterrows()):
-                verdict_str = row.get('verdict') or ''
-                vs_str      = f"{row['vs_kospi']:+.2f}%p" if row.get('vs_kospi') is not None else 'N/A'
-                m5_str      = f"{int(row['module5'])}점" if row.get('module5') is not None else 'N/A (레이더 미실행)'
-                score       = int(row['score'])
-                badge       = "🟢 강력 매수" if score >= 75 else "🟡 신중 매수" if score >= 55 else "🔴 관망"
+                # NaN 안전 처리 (pandas Series는 None 대신 NaN 반환)
+                verdict_val = row.get('verdict') if 'verdict' in row.index else None
+                verdict_str = str(verdict_val) if verdict_val is not None and not (isinstance(verdict_val, float) and pd.isna(verdict_val)) else ''
+                
+                vs_val = row.get('vs_kospi') if 'vs_kospi' in row.index else None
+                vs_is_valid = vs_val is not None and not (isinstance(vs_val, float) and pd.isna(vs_val))
+                vs_str = f"{float(vs_val):+.2f}%p" if vs_is_valid else 'N/A'
+                
+                m5_val = row.get('module5') if 'module5' in row.index else None
+                m5_is_valid = m5_val is not None and not (isinstance(m5_val, float) and pd.isna(m5_val))
+                m5_str = f"{int(float(m5_val))}점" if m5_is_valid else 'N/A (레이더 미실행)'
+                
+                score = int(row['score'])
+                badge = "🟢 강력 매수" if score >= 75 else "🟡 신중 매수" if score >= 55 else "🔴 관망"
 
                 st.markdown(f"""
 **{i+1}. {row['name']}** `{row['code']}` · {row['market']} &nbsp; {badge}
@@ -1392,10 +1401,10 @@ with tab3:
         # 연속형 점수: 거래량 배율에 비례 (20~95)
         raw_vscore = min(95, max(20, volume_ratio * 38 + 10))
         if volume_ratio >= 3.0:
-            breakout = "필펭 폭등 🟢🟢"
+            breakout = "폭발적 폭등 🟢🟢"
             volume_score = 95
         elif volume_ratio >= 2.0:
-            breakout = "높음 폽등 🟢"
+            breakout = "높은 폭등 🟢"
             volume_score = min(95, raw_vscore + 5)
         elif volume_ratio >= 1.5:
             breakout = "중상 폭등 🟢"
@@ -1404,7 +1413,7 @@ with tab3:
             breakout = "보통 🟡"
             volume_score = raw_vscore
         else:
-            breakout = "낙음 🔴"
+            breakout = "낮음 🔴"
             volume_score = raw_vscore
     else:
         volume_ratio = 0
@@ -1461,10 +1470,58 @@ with tab3:
     # 연속형 점수: R:R에 비례 (20~95)
     module4_score = min(95, max(20, int(risk_reward_ratio * 28 + 18)))
 
-    # **최종 점수** (4모듈 각 25%)
-    final_score = int(module1_score * 0.25 + module2_score * 0.25 + module3_score * 0.25 + module4_score * 0.25)
+    # ── 모듈 5: 시장 레이더 연동 ────────────────────────────────────────
+    module5_score  = None
+    m5_vs_kospi    = None
+    m5_verdict     = None
+    m5_kospi_chg   = None
+    m5_stock_chg   = None
 
-    # ========== 상세 분석 UI (이전과 동일) ==========
+    radar_df_tab3 = st.session_state.get('radar_results', None)
+    if radar_df_tab3 is not None and not radar_df_tab3.empty and 'ticker' in radar_df_tab3.columns:
+        matched = radar_df_tab3[radar_df_tab3['ticker'] == final_ticker]
+        if not matched.empty:
+            r = matched.iloc[0]
+            m5_vs_kospi  = float(r['vs_kospi'])   if pd.notna(r.get('vs_kospi'))  else None
+            m5_verdict   = str(r['verdict'])       if pd.notna(r.get('verdict'))   else None
+            m5_stock_chg = float(r['change_pct'])  if pd.notna(r.get('change_pct'))else None
+            m5_kospi_chg = float(st.session_state.get('radar_kospi_change', 0) or 0)
+
+            if m5_vs_kospi is not None:
+                if m5_verdict == '⭐ 역주행':
+                    module5_score = 100
+                elif m5_vs_kospi > 3.0:
+                    module5_score = 95
+                elif m5_vs_kospi > 2.0:
+                    module5_score = 85
+                elif m5_vs_kospi > 1.0:
+                    module5_score = 75
+                elif m5_vs_kospi > 0:
+                    module5_score = 63
+                elif m5_vs_kospi > -1.0:
+                    module5_score = 50
+                elif m5_vs_kospi > -2.0:
+                    module5_score = 35
+                else:
+                    module5_score = 20
+
+    # **최종 점수**
+    if module5_score is not None:
+        final_score = int(
+            module1_score * 0.20 +
+            module2_score * 0.20 +
+            module3_score * 0.20 +
+            module4_score * 0.20 +
+            module5_score * 0.20
+        )
+        score_formula = (f"({module1_score}×0.20) + ({module2_score}×0.20) + ({module3_score}×0.20) + "
+                         f"({module4_score}×0.20) + ({module5_score}×0.20) = **{final_score}점** (M5 포함)")
+    else:
+        final_score = int(module1_score * 0.25 + module2_score * 0.25 + module3_score * 0.25 + module4_score * 0.25)
+        score_formula = (f"({module1_score}×0.25) + ({module2_score}×0.25) + ({module3_score}×0.25) + "
+                         f"({module4_score}×0.25) = **{final_score}점**")
+
+    # ========== 상세 분석 UI ==========
     st.subheader("🕯️ 모듈 1: 추세 & 패턴 인식")
 
     st.info("""
@@ -1633,26 +1690,48 @@ with tab3:
 
     st.markdown("---")
 
-    # 4대 모듈 게이지
-    st.subheader("📊 4대 모듈 종합 점수")
 
-    fig_modules = make_subplots(
-        rows=2, cols=2,
-        specs=[[{'type': 'indicator'}, {'type': 'indicator'}],
-               [{'type': 'indicator'}, {'type': 'indicator'}]],
-        subplot_titles=("모듈1: 추세&패턴", "모듈2: 거래량", "모듈3: 매수신호", "모듈4: 리스크")
-    )
+    st.markdown("---")
 
-    for i, (score, row, col, color) in enumerate([
-        (module1_score, 1, 1, "darkblue"),
-        (module2_score, 1, 2, "darkorange"),
-        (module3_score, 2, 1, "darkgreen"),
-        (module4_score, 2, 2, "darkviolet")
-    ]):
+    # 모듈 게이지 (M5 유무에 따라 동적 표시)
+    if module5_score is not None:
+        st.subheader("📊 5대 모듈 종합 점수 (M5 시장 상대강도 포함)")
+        fig_modules = make_subplots(
+            rows=2, cols=3,
+            specs=[[{'type': 'indicator'}, {'type': 'indicator'}, {'type': 'indicator'}],
+                   [{'type': 'indicator'}, {'type': 'indicator'}, {'type': 'indicator'}]],
+            subplot_titles=("모듈1: 추세&패턴", "모듈2: 거래량", "모듈3: 매수신호",
+                            "모듈4: 리스크", "모듈5: 시장강도", "")
+        )
+        gauge_data = [
+            (module1_score, 1, 1, "darkblue"),
+            (module2_score, 1, 2, "darkorange"),
+            (module3_score, 1, 3, "darkgreen"),
+            (module4_score, 2, 1, "darkviolet"),
+            (module5_score, 2, 2, "#E74C3C"),
+        ]
+        h_mod = 500
+    else:
+        st.subheader("📊 4대 모듈 종합 점수")
+        fig_modules = make_subplots(
+            rows=2, cols=2,
+            specs=[[{'type': 'indicator'}, {'type': 'indicator'}],
+                   [{'type': 'indicator'}, {'type': 'indicator'}]],
+            subplot_titles=("모듈1: 추세&패턴", "모듈2: 거래량", "모듈3: 매수신호", "모듈4: 리스크")
+        )
+        gauge_data = [
+            (module1_score, 1, 1, "darkblue"),
+            (module2_score, 1, 2, "darkorange"),
+            (module3_score, 2, 1, "darkgreen"),
+            (module4_score, 2, 2, "darkviolet"),
+        ]
+        h_mod = 600
+
+    for (sv, r, c, color) in gauge_data:
         fig_modules.add_trace(go.Indicator(
             mode="gauge+number",
-            value=score,
-            title={'text': f"{score}점"},
+            value=sv,
+            title={'text': f"{sv}점"},
             gauge={
                 'axis': {'range': [0, 100]},
                 'bar': {'color': color},
@@ -1663,23 +1742,56 @@ with tab3:
                 ],
                 'threshold': {'line': {'color': "red", 'width': 4}, 'value': 75}
             }
-        ), row=row, col=col)
+        ), row=r, col=c)
 
-    fig_modules.update_layout(height=600, showlegend=False)
+    fig_modules.update_layout(height=h_mod, showlegend=False)
     st.plotly_chart(fig_modules, use_container_width=True)
+
+    # ── M5 시장 레이더 분석 박스 ────────────────────────────────────────
+    st.subheader("📡 모듈 5: 시장 상대강도 (코스피 대비)")
+    st.info("""
+    **📚 모듈 5란?**  
+    코스피가 하락하는 날, 오히려 상승하거나 덜 떨어지는 종목이 진짜 알짜배기 주식입니다.  
+    Tab 1(시장 레이더)에서 스캔을 먼저 실행하면 이 종목의 시장 상대강도 데이터가 자동 연동됩니다.
+    """)
+
+    if module5_score is not None:
+        m5c1, m5c2, m5c3, m5c4 = st.columns(4)
+        m5c1.metric("📡 M5 점수", f"{module5_score}점")
+        m5c2.metric("코스피 대비", f"{m5_vs_kospi:+.2f}%p" if m5_vs_kospi is not None else 'N/A')
+        m5c3.metric("오늘 이 종목", f"{m5_stock_chg:+.2f}%" if m5_stock_chg is not None else 'N/A')
+        m5c4.metric("코스피 변동", f"{m5_kospi_chg:+.2f}%" if m5_kospi_chg is not None else 'N/A')
+
+        verdict_info = {
+            '⭐ 역주행': ('🟢', '시장 하락 중 상승 → 최우선 관심 종목'),
+            '✅ 강한 방어': ('🟢', '코스피 대비 +1%p 초과 → 강한 주식'),
+            '🛡️ 방어': ('🟡', '코스피보다 덜 하락 → 방어력 있음'),
+            '➖ 동행': ('⚪', '시장과 비슷한 수준'),
+            '🔴 이탈': ('🔴', '코스피보다 크게 하락 → 주의')
+        }.get(m5_verdict, ('⚪', '데이터 없음'))
+
+        st.markdown(f"""
+| 항목 | 내용 |
+|------|------|
+| 레이더 판정 | {verdict_info[0]} **{m5_verdict}** |
+| 진단 | {verdict_info[1]} |
+| M5 점수 | **{module5_score}점** (Tab 1 레이더 데이터 연동) |
+| 코스피 대비 실적 | {f'{m5_vs_kospi:+.2f}%p' if m5_vs_kospi is not None else 'N/A'} |
+        """)
+    else:
+        st.warning("⚠️ Tab 1(시장 레이더)에서 스캔을 먼저 실행하시면 M5 점수가 추가됩니다.")
 
     st.markdown("---")
 
     # 최종 평가
     st.header("🏆 최종 종합 평가")
 
-    # 평가 기준 표시
     st.info("""
     **📊 평가 기준**
 
     - 🟢 **75점 이상**: 강력 매수 추천 → 모든 지표가 긍정적, 적극적 매수 고려
     - 🟡 **55~74점**: 신중 매수 → 일부 지표가 긍정적, 리스크 관리 필수
-    - 🔴 **55점 미만**: 매수 부적합 → 현재 매수 시점 아님, 관망 권장
+    - 🔴 **55점 미만**: 매수 부적합 → 현재 매수 시점이 아님, 관망 권장
     """)
 
     fig_final = go.Figure(go.Indicator(
@@ -1699,7 +1811,6 @@ with tab3:
             'threshold': {'line': {'color': "red", 'width': 4}, 'value': 75}
         }
     ))
-
     fig_final.update_layout(height=400)
     st.plotly_chart(fig_final, use_container_width=True)
 
@@ -1713,23 +1824,27 @@ with tab3:
         st.error("### 🔴 매수 부적합")
         st.markdown("**현재 매수 시점이 아닙니다. 관망을 권장합니다.**")
 
-    # 기여도
+    # 기여도 테이블
     st.markdown("### 📊 모듈별 기여도")
+    if module5_score is not None:
+        w = 0.20
+        mods   = ['M1 추세&패턴', 'M2 거래량', 'M3 매수조건', 'M4 R:R리스크', 'M5 시장강도']
+        scores = [module1_score, module2_score, module3_score, module4_score, module5_score]
+    else:
+        w = 0.25
+        mods   = ['M1 추세&패턴', 'M2 거래량', 'M3 매수조건', 'M4 R:R리스크']
+        scores = [module1_score, module2_score, module3_score, module4_score]
+
     contrib_df = pd.DataFrame({
-        '모듈': ['모듈1', '모듈2', '모듈3', '모듈4'],
-        '점수': [module1_score, module2_score, module3_score, module4_score],
-        '가중치': ['25%', '25%', '25%', '25%'],
-        '기여도': [
-            f"{module1_score * 0.25:.1f}점",
-            f"{module2_score * 0.25:.1f}점",
-            f"{module3_score * 0.25:.1f}점",
-            f"{module4_score * 0.25:.1f}점"
-        ]
+        '모듈':  mods,
+        '점수':  scores,
+        '가중치': [f"{int(w*100)}%"] * len(mods),
+        '기여도': [f"{s * w:.1f}점" for s in scores]
     })
     st.dataframe(contrib_df, use_container_width=True)
 
     st.markdown(f"""
-    **최종 점수**: ({module1_score} × 0.25) + ({module2_score} × 0.25) + ({module3_score} × 0.25) + ({module4_score} × 0.25) = **{final_score}점**
+    **최종 점수**: {score_formula}
     """)
 
     st.markdown("---")
