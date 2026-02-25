@@ -6,6 +6,7 @@ from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import time
+import difflib
 
 # FinanceDataReader 임포트
 try:
@@ -71,27 +72,88 @@ def load_all_korean_stocks():
         return {}, None
 
 def search_stock(query, stock_dict, all_stocks_df):
-    """종목 검색"""
-    query = str(query).strip().lower()
-    
-    if query in stock_dict:
-        return stock_dict[query], None
-    
+    """
+    종목 검색 - 4단계 폴백 검색 + 유사 종목 추천
+    Returns: (ticker_or_None, matches_df_or_None, search_type)
+      search_type: 'exact' | 'partial' | 'similar' | 'notfound'
+    """
+    query_raw = str(query).strip()
+    query_lower = query_raw.lower()
+
+    # ── 1단계: 종목 코드 직접 입력 (숫자) ──────────────────────────
+    if query_raw.isdigit():
+        code_padded = query_raw.zfill(6)
+        # 정확 코드 일치
+        if code_padded in stock_dict:
+            return stock_dict[code_padded], None, 'exact'
+        # stock_dict는 소문자 이름 & 코드 둘 다 저장 — 원본 코드로도 시도
+        if query_raw in stock_dict:
+            return stock_dict[query_raw], None, 'exact'
+        # all_stocks_df에서 코드 검색
+        if all_stocks_df is not None:
+            code_matches = all_stocks_df[
+                all_stocks_df['Code'].astype(str).str.zfill(6) == code_padded
+            ]
+            if len(code_matches) == 1:
+                code = str(code_matches.iloc[0]['Code'])
+                market = str(code_matches.iloc[0]['Market'])
+                ticker = f"{code}.KS" if market == 'KOSPI' else f"{code}.KQ"
+                return ticker, None, 'exact'
+
+    # ── 2단계: 이름 정확 매칭 (공백·특수문자 제거 후) ───────────────
+    q_clean = query_lower.replace(" ", "").replace("(", "").replace(")", "")
+    if query_lower in stock_dict:
+        return stock_dict[query_lower], None, 'exact'
+    if q_clean in stock_dict:
+        return stock_dict[q_clean], None, 'exact'
+
     if all_stocks_df is not None:
-        matches = all_stocks_df[
-            all_stocks_df['Name'].str.lower().str.contains(query, na=False)
-        ]
-        
-        if len(matches) == 1:
-            code = str(matches.iloc[0]['Code'])
-            market = str(matches.iloc[0]['Market'])
+        # Name 컬럼 정규화 버전 캐시
+        names_lower = all_stocks_df['Name'].str.lower().str.strip()
+        names_clean = names_lower.str.replace(r"[\s\(\)\.\-]", "", regex=True)
+
+        # ── 3단계: 부분 포함 검색 (regex=False — 한글/특수문자 안전) ──
+        mask_partial = names_lower.str.contains(query_lower, na=False, regex=False)
+        partial_matches = all_stocks_df[mask_partial]
+
+        if len(partial_matches) == 1:
+            code = str(partial_matches.iloc[0]['Code'])
+            market = str(partial_matches.iloc[0]['Market'])
             ticker = f"{code}.KS" if market == 'KOSPI' else f"{code}.KQ"
-            return ticker, None
-        
-        elif len(matches) > 1:
-            return None, matches.head(10)
-    
-    return None, None
+            return ticker, None, 'exact'
+        elif len(partial_matches) > 1:
+            return None, partial_matches.head(10).reset_index(drop=True), 'partial'
+
+        # 공백 제거 버전으로 한 번 더
+        mask_clean = names_clean.str.contains(q_clean, na=False, regex=False)
+        clean_matches = all_stocks_df[mask_clean]
+        if len(clean_matches) == 1:
+            code = str(clean_matches.iloc[0]['Code'])
+            market = str(clean_matches.iloc[0]['Market'])
+            ticker = f"{code}.KS" if market == 'KOSPI' else f"{code}.KQ"
+            return ticker, None, 'exact'
+        elif len(clean_matches) > 1:
+            return None, clean_matches.head(10).reset_index(drop=True), 'partial'
+
+        # ── 4단계: difflib 유사도 추천 ────────────────────────────────
+        all_names_list = names_lower.tolist()
+        # cutoff 0.5부터 시작, 결과 없으면 0.35로 낮춤
+        for cutoff in [0.55, 0.40, 0.30]:
+            close_names = difflib.get_close_matches(query_lower, all_names_list, n=10, cutoff=cutoff)
+            if close_names:
+                break
+
+        if close_names:
+            sim_mask = names_lower.isin(close_names)
+            similar_df = all_stocks_df[sim_mask].copy()
+            # 유사도 점수 컬럼 추가 (정렬용)
+            similar_df['_sim'] = similar_df['Name'].str.lower().apply(
+                lambda n: difflib.SequenceMatcher(None, query_lower, n).ratio()
+            )
+            similar_df = similar_df.sort_values('_sim', ascending=False).drop(columns=['_sim'])
+            return None, similar_df.head(10).reset_index(drop=True), 'similar'
+
+    return None, None, 'notfound' 
 
 def load_stock_data(ticker, max_retries=2):
     """주식 데이터 로드 (스캔용 간소화 버전)"""
@@ -1508,23 +1570,49 @@ with tab3:
         st.session_state.current_ticker = None
     else:
         # 검색
+        st.markdown("""
+        <div style='background:#EBF5FB; border-left:4px solid #2E86C1;
+             padding:10px 16px; border-radius:6px; margin-bottom:12px;'>
+        🔎 <b>종목명</b> 또는 <b>종목코드</b>로 검색하세요<br>
+        <span style='font-size:12px; color:#555;'>
+        • 이름 검색: <code>파미셀</code> / <code>삼성</code> / <code>카카오</code><br>
+        • 코드 검색: <code>005930</code> / <code>35720</code><br>
+        • 오타여도 유사 종목을 자동으로 추천해 드립니다 ✨
+        </span>
+        </div>
+        """, unsafe_allow_html=True)
+
         col1, col2 = st.columns([3, 1])
         with col1:
             query = st.text_input(
                 "종목 검색",
-                placeholder="종목명 또는 코드 (예: 삼성전자, 005930)",
-                key="stock_search_input"
+                placeholder="예) 파미셀, 삼성전자, 005930, 카카오뱅크...",
+                key="stock_search_input",
+                label_visibility="collapsed"
             )
         with col2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            search_btn = st.button("🔎 검색", type="secondary", use_container_width=True)
+            search_btn = st.button("🔎 검색", type="primary", use_container_width=True)
 
         if not query:
-            st.info("👆 종목을 입력하거나 위의 추천 종목을 확인하세요")
-            with st.expander("💡 검색 가능 종목"):
-                if all_stocks_df is not None:
-                    sample = all_stocks_df.head(20)[['Code', 'Name', 'Market']]
-                    st.dataframe(sample, use_container_width=True)
+            st.info("👆 종목명이나 코드를 입력 후 검색 버튼을 눌러주세요")
+            with st.expander("💡 자주 찾는 종목 예시"):
+                quick_stocks = [
+                    ("005930","삼성전자","KOSPI"), ("000660","SK하이닉스","KOSPI"),
+                    ("035420","NAVER","KOSPI"),   ("035720","카카오","KOSPI"),
+                    ("207940","삼성바이오로직스","KOSPI"), ("051910","LG화학","KOSPI"),
+                    ("068270","셀트리온","KOSPI"), ("028260","삼성물산","KOSPI"),
+                    ("066570","LG전자","KOSPI"),  ("015760","한국전력","KOSPI"),
+                    ("091990","셀트리온헬스케어","KOSDAQ"), ("196170","알테오젠","KOSDAQ"),
+                    ("293490","카카오게임즈","KOSDAQ"), ("112040","위메이드","KOSDAQ"),
+                    ("264900","파미셀","KOSDAQ"),
+                ]
+                qcols = st.columns(3)
+                for qi, (code, name, mkt) in enumerate(quick_stocks):
+                    with qcols[qi % 3]:
+                        qticker = f"{code}.KS" if mkt=='KOSPI' else f"{code}.KQ"
+                        if st.button(f"{name}", key=f"quick_{code}", use_container_width=True):
+                            st.session_state.current_ticker = qticker
+                            st.rerun()
             st.stop()
 
         if not search_btn:
@@ -1532,34 +1620,85 @@ with tab3:
 
         # 검색 실행
         with st.spinner("🔍 검색 중..."):
-            ticker, matches = search_stock(query, stock_dict, all_stocks_df)
+            ticker, matches, search_type = search_stock(query, stock_dict, all_stocks_df)
 
-            if ticker:
-                st.success(f"✅ 발견: {ticker}")
-                final_ticker = ticker
+        # ── 검색 결과 처리 ─────────────────────────────────────────────
+        if ticker:
+            # 정확히 1개 찾음 → 바로 분석 시작
+            final_ticker = ticker
 
-            elif matches is not None and len(matches) > 0:
-                st.warning(f"⚠️ {len(matches)}개 종목 발견")
+        elif matches is not None and len(matches) > 0:
+            if search_type == 'partial':
+                st.info(f"🔍 **'{query}'** 포함 종목 {len(matches)}개를 찾았습니다. 분석할 종목을 선택해 주세요.")
+            elif search_type == 'similar':
+                st.warning(f"💡 **'{query}'** 와(과) 정확히 일치하는 종목이 없습니다.\n혹시 이 종목을 찾으셨나요?")
 
-                for idx, row in matches.iterrows():
-                    code = str(row['Code'])
-                    name = str(row['Name'])
+            # 종목 카드 그리드 (한 줄에 2개)
+            n_cols = 2
+            rows_iter = [matches.iloc[i:i+n_cols] for i in range(0, len(matches), n_cols)]
+            for row_group in rows_iter:
+                card_cols = st.columns(n_cols)
+                for ci, (_, row) in enumerate(row_group.iterrows()):
+                    code   = str(row['Code'])
+                    name   = str(row['Name'])
                     market = str(row['Market'])
                     ticker_code = f"{code}.KS" if market == 'KOSPI' else f"{code}.KQ"
-
-                    col1, col2 = st.columns([4, 1])
-                    with col1:
-                        st.markdown(f"**{name}** ({code}) - {market}")
-                    with col2:
-                        if st.button("선택", key=f"sel_{idx}", use_container_width=True):
+                    with card_cols[ci]:
+                        sim_label = ""
+                        if search_type == 'similar':
+                            sim_score = difflib.SequenceMatcher(
+                                None, query.strip().lower(), name.lower()
+                            ).ratio()
+                            sim_label = f" &nbsp; `유사도 {sim_score*100:.0f}%`"
+                        st.markdown(
+                            f"""<div style='border:1px solid #ddd; border-radius:8px;
+                                padding:10px 14px; margin-bottom:6px;
+                                background:#f8f9fa;'>
+                            <b style='font-size:15px'>{name}</b>{sim_label}<br>
+                            <span style='color:#666; font-size:12px'>코드: {code} &nbsp;|&nbsp; {market}</span>
+                            </div>""",
+                            unsafe_allow_html=True
+                        )
+                        if st.button(f"📊 {name} 분석",
+                                     key=f"sel_{code}_{ci}",
+                                     use_container_width=True,
+                                     type="primary"):
                             st.session_state.current_ticker = ticker_code
                             st.rerun()
 
-                st.stop()
+            st.stop()
 
+        else:
+            # 완전 검색 실패 → 마지막 시도: difflib cutoff 더 낮게
+            last_try = []
+            if all_stocks_df is not None:
+                names_lower = all_stocks_df['Name'].str.lower().str.strip()
+                last_try = difflib.get_close_matches(
+                    query.strip().lower(), names_lower.tolist(), n=6, cutoff=0.25
+                )
+
+            if last_try:
+                st.error(f"❌ **'{query}'** 종목을 찾지 못했습니다.")
+                st.info("💡 혹시 이런 종목을 찾으셨나요?")
+                last_mask = names_lower.isin(last_try)
+                last_df = all_stocks_df[last_mask].head(6).reset_index(drop=True)
+                lc = st.columns(min(3, len(last_df)))
+                for ci, (_, row) in enumerate(last_df.iterrows()):
+                    code   = str(row['Code'])
+                    name   = str(row['Name'])
+                    market = str(row['Market'])
+                    ticker_code = f"{code}.KS" if market == 'KOSPI' else f"{code}.KQ"
+                    with lc[ci % 3]:
+                        if st.button(f"🔍 {name}\n({code})",
+                                     key=f"lastres_{code}",
+                                     use_container_width=True):
+                            st.session_state.current_ticker = ticker_code
+                            st.rerun()
             else:
-                st.error(f"❌ '{query}' 없음")
-                st.stop()
+                st.error(f"❌ **'{query}'** 종목을 찾지 못했습니다.")
+                st.info("💡 **검색 팁:** 종목코드(6자리 숫자)로 검색하면 더 정확합니다.\n예: 삼성전자 → 005930, 카카오 → 035720")
+
+            st.stop()
 
     # 데이터 로드 (상세 분석용)
     st.markdown("---")
