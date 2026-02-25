@@ -135,209 +135,308 @@ def calculate_rsi(data, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def calculate_stock_score(hist, current_price):
-    """종목 점수 계산 (빠른 버전)"""
+def calculate_stock_score(hist, current_price, vs_kospi=None, verdict=None):
+    """
+    종목 점수 계산 (세분화된 5모듈 버전)
+    - vs_kospi: 시장 레이더에서 계산된 코스피 대비 초과수익률 (있으면 M5 포함)
+    - verdict: 시장 레이더 판정 (역주행/방어 등)
+    """
     try:
         if len(hist) < 20:
             return 0, {}
-        
-        # 이동평균
-        hist['MA5'] = hist['Close'].rolling(window=5).mean()
-        hist['MA20'] = hist['Close'].rolling(window=20).mean()
-        hist['MA60'] = hist['Close'].rolling(window=60).mean()
+
+        # ── 이동평균 계산 ──────────────────────────────────────────
+        hist = hist.copy()
+        hist['MA5']   = hist['Close'].rolling(window=5).mean()
+        hist['MA20']  = hist['Close'].rolling(window=20).mean()
+        hist['MA60']  = hist['Close'].rolling(window=60).mean()
         hist['MA120'] = hist['Close'].rolling(window=120).mean()
-        
+
         latest = hist.iloc[-1]
-        ma5 = float(latest['MA5']) if pd.notna(latest['MA5']) else current_price
-        ma20 = float(latest['MA20']) if pd.notna(latest['MA20']) else current_price
-        ma60 = float(latest['MA60']) if pd.notna(latest['MA60']) else current_price
+        ma5   = float(latest['MA5'])   if pd.notna(latest['MA5'])   else current_price
+        ma20  = float(latest['MA20'])  if pd.notna(latest['MA20'])  else current_price
+        ma60  = float(latest['MA60'])  if pd.notna(latest['MA60'])  else current_price
         ma120 = float(latest['MA120']) if pd.notna(latest['MA120']) else current_price
-        
-        # 모듈 1: 추세
-        if ma5 > ma20 > ma60 > ma120:
-            ma_score = 85
-        elif ma5 < ma20 < ma60 < ma120:
-            ma_score = 20
-        else:
-            ma_score = 50
-        
-        # 골든크로스
-        if len(hist) >= 2:
-            prev_ma20 = hist['MA20'].iloc[-2]
-            prev_ma60 = hist['MA60'].iloc[-2]
-            if pd.notna(prev_ma20) and pd.notna(prev_ma60):
-                if ma20 > ma60 and prev_ma20 <= prev_ma60:
-                    cross_score = 90
-                elif ma20 < ma60 and prev_ma20 >= prev_ma60:
-                    cross_score = 10
+
+        # ── 모듈 1: 추세·정배열 (세분화) ──────────────────────────
+        # MA 정배열 점수: 몇 개 MA가 정순서인지 세분화
+        align_checks = [
+            ma5   > ma20,
+            ma20  > ma60,
+            ma60  > ma120,
+            ma5   > ma60,   # 추가 강도
+            ma20  > ma120,  # 추가 강도
+        ]
+        align_count = sum(align_checks)
+        if align_count == 5:          # 완전 정배열
+            ma_score = 92
+        elif align_count == 4:
+            ma_score = 78
+        elif align_count == 3:
+            ma_score = 62
+        elif align_count == 2:
+            ma_score = 46
+        elif align_count == 1:
+            ma_score = 32
+        else:                         # 완전 역배열
+            ma_score = 15
+
+        # MA 기울기 보너스 (+최대 8점)
+        slope_bonus = 0
+        if len(hist) >= 5:
+            ma20_slope = float(hist['MA20'].iloc[-1]) - float(hist['MA20'].iloc[-5]) if pd.notna(hist['MA20'].iloc[-5]) else 0
+            ma60_slope = float(hist['MA60'].iloc[-1]) - float(hist['MA60'].iloc[-5]) if pd.notna(hist['MA60'].iloc[-5]) else 0
+            if ma20_slope > 0:
+                slope_bonus += 4
+            if ma60_slope > 0:
+                slope_bonus += 4
+        ma_score = min(100, ma_score + slope_bonus)
+
+        # 골든/데드크로스 점수 (세분화)
+        cross_score = 50
+        if len(hist) >= 5:
+            prev_ma20 = hist['MA20'].iloc[-2] if pd.notna(hist['MA20'].iloc[-2]) else ma20
+            prev_ma60 = hist['MA60'].iloc[-2] if pd.notna(hist['MA60'].iloc[-2]) else ma60
+            gap_pct = abs(ma20 - ma60) / ma60 * 100 if ma60 != 0 else 0
+
+            if ma20 > ma60 and prev_ma20 <= prev_ma60:   # 골든크로스 발생
+                cross_score = 95
+            elif ma20 > ma60:
+                if gap_pct >= 3:
+                    cross_score = 72   # 골든크로스 이후 안정
+                elif gap_pct >= 1:
+                    cross_score = 63   # 골든크로스 직후
                 else:
-                    cross_score = 50
+                    cross_score = 55   # 막 넘어선 상태
+            elif ma20 < ma60 and prev_ma20 >= prev_ma60: # 데드크로스 발생
+                cross_score = 8
             else:
-                cross_score = 50
-        else:
-            cross_score = 50
-        
+                if gap_pct >= 3:
+                    cross_score = 22   # 역배열 깊음
+                elif gap_pct >= 1:
+                    cross_score = 32   # 역배열 진입
+                else:
+                    cross_score = 42   # 수렴 중
+
         module1_score = int(ma_score * 0.6 + cross_score * 0.4)
-        
-        # 모듈 2: 거래량
+
+        # ── 모듈 2: 거래량 (연속형 세분화) ───────────────────────
         hist['Volume_MA20'] = hist['Volume'].rolling(window=20).mean()
         current_volume = float(hist['Volume'].iloc[-1])
         avg_volume = float(hist['Volume_MA20'].iloc[-1]) if pd.notna(hist['Volume_MA20'].iloc[-1]) else 1
-        
+
         if avg_volume > 0:
             volume_ratio = current_volume / avg_volume
-            if volume_ratio >= 2.0:
-                volume_score = 90
-            elif volume_ratio >= 1.5:
-                volume_score = 75
-            elif volume_ratio >= 1.2:
-                volume_score = 60
-            elif volume_ratio >= 0.8:
-                volume_score = 45
+            # 연속형 점수: 거래량 배율에 비례 (20~95 범위)
+            raw_score = min(95, max(20, volume_ratio * 38 + 10))
+            # 임계값 보정: 2배 이상이면 추가 보너스
+            if volume_ratio >= 3.0:
+                volume_score = 95
+            elif volume_ratio >= 2.0:
+                volume_score = min(95, raw_score + 5)
             else:
-                volume_score = 25
+                volume_score = raw_score
         else:
             volume_ratio = 0
-            volume_score = 50
-        
+            volume_score = 45
+
         module2_score = int(volume_score)
-        
-        # 모듈 3: 매수 조건
+
+        # ── 모듈 3: 매수 조건 (조건 품질 세분화) ──────────────────
         cond1 = current_price > ma120
         high_20d = float(hist['Close'].tail(20).max())
-        cond2 = current_price >= high_20d * 0.95  # 20일 고점 근처
-        
+        low_20d  = float(hist['Close'].tail(20).min())
+        cond2 = current_price >= high_20d * 0.95
+
         if len(hist) >= 2:
             pct_chg = ((current_price - float(hist['Close'].iloc[-2])) / float(hist['Close'].iloc[-2])) * 100
-            cond3 = -5 <= pct_chg <= 15
+            cond3 = -2 <= pct_chg <= 15
         else:
             pct_chg = 0
             cond3 = False
-        
+
         cond4 = volume_ratio >= 1.5
-        
         satisfied = sum([cond1, cond2, cond3, cond4])
-        
-        if satisfied == 4:
-            module3_score = 100
-        elif satisfied == 3:
-            module3_score = 80
-        elif satisfied == 2:
-            module3_score = 60
-        elif satisfied == 1:
-            module3_score = 40
-        else:
-            module3_score = 20
-        
-        # 모듈 4: 리스크
+
+        # 기본 점수
+        base3 = {4: 80, 3: 63, 2: 46, 1: 30, 0: 15}[satisfied]
+
+        # 품질 보너스 (최대 20점)
+        quality_bonus = 0
+        # cond1 품질: MA120 대비 얼마나 위에 있나
+        if cond1 and ma120 > 0:
+            margin = (current_price - ma120) / ma120 * 100
+            quality_bonus += min(5, margin * 0.5)
+        # cond2 품질: 20일 고점에 얼마나 근접
+        if high_20d > low_20d:
+            pos_ratio = (current_price - low_20d) / (high_20d - low_20d)
+            quality_bonus += min(5, pos_ratio * 5)
+        # cond3 품질: 최적 변화율 3~10%에 가까울수록
+        if cond3 and 3 <= pct_chg <= 10:
+            quality_bonus += 5
+        elif cond3 and 0 < pct_chg < 3:
+            quality_bonus += 3
+        # cond4 품질: 거래량 배율이 높을수록
+        if cond4:
+            quality_bonus += min(5, (volume_ratio - 1.5) * 2.5)
+
+        module3_score = min(100, int(base3 + quality_bonus))
+
+        # ── 모듈 4: 리스크·리워드 (연속형 세분화) ─────────────────
         sl_methods = {
             'open': float(latest['Open']),
-            'low': float(latest['Low']),
+            'low':  float(latest['Low']),
             '3pct': current_price * 0.97,
-            'ma20': ma20
+            'ma20': ma20,
         }
-        
         final_sl = max(sl_methods.values())
-        risk_pct = ((final_sl - current_price) / current_price) * 100
-        target = current_price + abs(current_price - final_sl) * 2
+        risk_pct   = ((final_sl - current_price) / current_price) * 100  # 음수
+        target     = current_price + abs(current_price - final_sl) * 2
         reward_pct = ((target - current_price) / current_price) * 100
-        
-        risk_reward_ratio = abs(reward_pct / risk_pct) if risk_pct != 0 else 0
-        
-        if risk_reward_ratio >= 2.5:
-            module4_score = 95
-        elif risk_reward_ratio >= 2.0:
-            module4_score = 85
-        elif risk_reward_ratio >= 1.5:
-            module4_score = 70
+
+        risk_reward_ratio = abs(reward_pct / risk_pct) if risk_pct != 0 else 1.0
+        # 연속형 점수: R:R에 비례 (20~95 범위)
+        module4_score = min(95, max(20, int(risk_reward_ratio * 28 + 18)))
+
+        # ── 모듈 5: 시장 상대 강도 (레이더 데이터 있을 때) ────────
+        module5_score = None
+        if vs_kospi is not None:
+            if verdict == "⭐ 역주행":           # 지수 하락 중 상승 → 최고
+                module5_score = 100
+            elif vs_kospi > 3.0:
+                module5_score = 95
+            elif vs_kospi > 2.0:
+                module5_score = 85
+            elif vs_kospi > 1.0:
+                module5_score = 75
+            elif vs_kospi > 0:
+                module5_score = 63
+            elif vs_kospi > -1.0:
+                module5_score = 50
+            elif vs_kospi > -2.0:
+                module5_score = 35
+            else:
+                module5_score = 20
+
+        # ── 최종 점수 (모듈 가중 합산) ────────────────────────────
+        if module5_score is not None:
+            # M5 포함: 각 20%
+            final_score = int(
+                module1_score * 0.20 +
+                module2_score * 0.20 +
+                module3_score * 0.20 +
+                module4_score * 0.20 +
+                module5_score * 0.20
+            )
         else:
-            module4_score = 50
-        
-        # 최종 점수
-        final_score = int(module1_score * 0.25 + module2_score * 0.25 + module3_score * 0.25 + module4_score * 0.25)
-        
+            final_score = int(
+                module1_score * 0.25 +
+                module2_score * 0.25 +
+                module3_score * 0.25 +
+                module4_score * 0.25
+            )
+
         details = {
-            'module1': module1_score,
-            'module2': module2_score,
-            'module3': module3_score,
-            'module4': module4_score,
-            'volume_ratio': volume_ratio,
-            'conditions': satisfied,
-            'rr_ratio': risk_reward_ratio
+            'module1':      module1_score,
+            'module2':      module2_score,
+            'module3':      module3_score,
+            'module4':      module4_score,
+            'module5':      module5_score,
+            'volume_ratio': round(volume_ratio, 2),
+            'conditions':   satisfied,
+            'rr_ratio':     round(risk_reward_ratio, 2),
+            'pct_chg':      round(pct_chg, 2) if len(hist) >= 2 else 0,
+            'vs_kospi':     round(vs_kospi, 2) if vs_kospi is not None else None,
+            'verdict':      verdict,
         }
-        
+
         return final_score, details
-    
+
     except Exception as e:
         return 0, {}
 
 def scan_stocks(stock_list, mode='quick'):
-    """종목 스캔"""
+    """
+    종목 스캔 (시장 레이더 데이터 연동 + M5 반영)
+    """
     results = []
-    
+
+    # ─ 시장 레이더 데이터 미리 수집 ─────────────────────────────────
+    radar_lookup = {}   # {ticker: {'vs_kospi': float, 'verdict': str}}
+    radar_df = st.session_state.get('radar_results', None)
+    if radar_df is not None and not radar_df.empty and 'ticker' in radar_df.columns:
+        for _, rrow in radar_df.iterrows():
+            radar_lookup[rrow['ticker']] = {
+                'vs_kospi': rrow.get('vs_kospi', None),
+                'verdict':  rrow.get('verdict',  None),
+            }
+        st.info(f"📡 시장 레이더 데이터 {len(radar_lookup)}개 종목 연동 완료 → M5 모듈 적용")
+    else:
+        st.info("⚠️ 시장 레이더 데이터 없음 → M1~M4 기준 점수 산정 (M5 제외)")
+
     if mode == 'quick':
-        # 주요 대형주 100개만 스캔
         stocks_to_scan = stock_list.head(100)
         st.info("🔍 주요 대형주 100개 종목 스캔 중...")
     else:
-        # 전체 종목 스캔
         stocks_to_scan = stock_list
         st.warning(f"🔍 전체 {len(stock_list)}개 종목 스캔 중... 약 10-20분 소요됩니다.")
-    
+
     progress_bar = st.progress(0)
-    status_text = st.empty()
-    
+    status_text  = st.empty()
     total = len(stocks_to_scan)
-    
-    for idx, row in stocks_to_scan.iterrows():
-        code = str(row['Code'])
-        name = str(row['Name'])
+
+    for enum_idx, (df_idx, row) in enumerate(stocks_to_scan.iterrows()):
+        code   = str(row['Code'])
+        name   = str(row['Name'])
         market = str(row['Market'])
-        
         ticker = f"{code}.KS" if market == 'KOSPI' else f"{code}.KQ"
-        
-        # 진행률 업데이트
-        progress = (idx + 1) / total
-        progress_bar.progress(progress)
-        status_text.text(f"분석 중: {name} ({code}) - {idx+1}/{total}")
-        
-        # 데이터 로드
+
+        progress_bar.progress((enum_idx + 1) / total)
+        status_text.text(f"분석 중: {name} ({code}) - {enum_idx+1}/{total}")
+
         is_valid, company_name, current_price, hist = load_stock_data(ticker, max_retries=1)
-        
         if not is_valid:
             continue
-        
-        # 점수 계산
-        score, details = calculate_stock_score(hist, current_price)
-        
-        if score >= 55:  # 55점 이상만 저장
+
+        # 레이더 데이터 연동
+        radar_info = radar_lookup.get(ticker, {})
+        vs_kospi   = radar_info.get('vs_kospi', None)
+        verdict    = radar_info.get('verdict',  None)
+
+        score, details = calculate_stock_score(
+            hist, current_price, vs_kospi=vs_kospi, verdict=verdict
+        )
+
+        if score >= 50:   # 50점 이상만 저장 (더 많은 후보 확보 후 상위 10개로 필터)
             results.append({
-                'ticker': ticker,
-                'code': code,
-                'name': name,
-                'market': market,
-                'price': current_price,
-                'score': score,
-                'module1': details.get('module1', 0),
-                'module2': details.get('module2', 0),
-                'module3': details.get('module3', 0),
-                'module4': details.get('module4', 0),
+                'ticker':       ticker,
+                'code':         code,
+                'name':         name,
+                'market':       market,
+                'price':        current_price,
+                'score':        score,
+                'module1':      details.get('module1', 0),
+                'module2':      details.get('module2', 0),
+                'module3':      details.get('module3', 0),
+                'module4':      details.get('module4', 0),
+                'module5':      details.get('module5'),         # None 가능
                 'volume_ratio': details.get('volume_ratio', 0),
-                'conditions': details.get('conditions', 0),
-                'rr_ratio': details.get('rr_ratio', 0)
+                'conditions':   details.get('conditions', 0),
+                'rr_ratio':     details.get('rr_ratio', 0),
+                'vs_kospi':     details.get('vs_kospi'),        # None 가능
+                'verdict':      details.get('verdict'),         # None 가능
+                'pct_chg':      details.get('pct_chg', 0),
             })
-        
-        # API 과부하 방지
+
         time.sleep(0.1)
-    
+
     progress_bar.empty()
     status_text.empty()
-    
-    # 점수순 정렬
+
     results_df = pd.DataFrame(results)
     if not results_df.empty:
         results_df = results_df.sort_values('score', ascending=False).head(10)
-    
+
     return results_df
 
 def create_pattern_reference(pattern_type):
@@ -952,14 +1051,31 @@ with tab1:
 # ================================================
 with tab2:
     st.subheader("🎯 투자 적합 종목 추천")
+    st.markdown("""
+    > 📌 **M1** 추세·정배열 · **M2** 거래량 이상 · **M3** 4대 매수조건 · **M4** 리스크:리워드 · **M5** 시장 상대강도  
+    > 시장 레이더(Tab 1)를 먼저 실행하면 **M5 시장 상대강도**가 자동 반영됩니다.
+    """)
+
+    # 점수 기준 인포박스
+    st.info("""
+    📊 **종합 점수 기준**  
+    🟢 **75점 이상** : 강력 매수 추천 → 즉시 상세 분석  
+    🟡 **55~74점** : 신중 매수 → 리스크 관리 필수  
+    🔴 **55점 미만** : 매수 부적합 → 관망  
+    """)
+
+    # 레이더 연동 상태 알림
+    radar_df_tab2 = st.session_state.get('radar_results', None)
+    if radar_df_tab2 is not None and not radar_df_tab2.empty:
+        st.success(f"✅ 시장 레이더 데이터 연동 완료 ({len(radar_df_tab2)}개 종목 · M5 모듈 활성화)")
+    else:
+        st.warning("⚠️ 시장 레이더 데이터 없음 → Tab 1에서 '시장 레이더 스캔'을 먼저 실행하면 M5 점수가 추가됩니다.")
 
     col1, col2 = st.columns(2)
-
     with col1:
         if st.button("🚀 주요 대형주 빠른 추천 (100개)", type="primary", use_container_width=True):
             st.session_state.scan_mode = 'quick'
             st.session_state.scan_results = None
-
     with col2:
         if st.button("🔍 전체 종목 검색 (약 10-20분 소요)", use_container_width=True):
             st.session_state.scan_mode = 'full'
@@ -974,64 +1090,131 @@ with tab2:
 
     # 결과 표시
     if st.session_state.scan_results is not None and not st.session_state.scan_results.empty:
-        st.success(f"✅ 상위 {len(st.session_state.scan_results)}개 종목 발견!")
+        res_df = st.session_state.scan_results
+        has_m5 = 'module5' in res_df.columns and res_df['module5'].notna().any()
 
-        # 결과 테이블
-        display_df = st.session_state.scan_results[['name', 'code', 'market', 'price', 'score', 'module1', 'module2', 'module3', 'module4']].copy()
-        display_df.columns = ['종목명', '코드', '시장', '현재가', '최종점수', 'M1', 'M2', 'M3', 'M4']
-        display_df['현재가'] = display_df['현재가'].apply(lambda x: f"{x:,.0f}원")
-
-        st.dataframe(display_df, use_container_width=True, height=400)
-
-        # 상세 정보
-        with st.expander("📊 상세 점수 정보"):
-            for idx, row in st.session_state.scan_results.iterrows():
-                st.markdown(f"""
-                **{idx+1}. {row['name']}** ({row['code']}) - {row['market']}
-                - 💰 현재가: {row['price']:,.0f}원
-                - 🏆 최종 점수: **{row['score']}점**
-                - 📊 모듈별: M1={row['module1']}점 | M2={row['module2']}점 | M3={row['module3']}점 | M4={row['module4']}점
-                - 📈 거래량 배율: {row['volume_ratio']:.2f}배 | 조건 충족: {row['conditions']}/4 | R:R={row['rr_ratio']:.2f}:1
-                """)
-                st.markdown("---")
-
-        # 차트
-        st.markdown("### 📊 상위 10개 종목 점수 비교")
-
-        fig_compare = go.Figure()
-
-        fig_compare.add_trace(go.Bar(
-            x=st.session_state.scan_results['name'],
-            y=st.session_state.scan_results['score'],
-            text=st.session_state.scan_results['score'],
-            textposition='outside',
-            marker_color=['green' if s >= 75 else 'orange' if s >= 55 else 'red' 
-                          for s in st.session_state.scan_results['score']]
-        ))
-
-        fig_compare.add_hline(y=75, line_dash="dash", line_color="green", 
-                              annotation_text="강력 매수 (75점)", annotation_position="right")
-        fig_compare.add_hline(y=55, line_dash="dash", line_color="orange", 
-                              annotation_text="신중 매수 (55점)", annotation_position="right")
-
-        fig_compare.update_layout(
-            title="투자 적합도 점수 비교",
-            xaxis_title="종목명",
-            yaxis_title="점수",
-            height=500,
-            showlegend=False
+        st.success(f"✅ 상위 {len(res_df)}개 종목 발견!  {'(M5 시장 상대강도 포함)' if has_m5 else '(M1~M4 기준)'}"
         )
 
+        # ── 메인 결과 테이블 ────────────────────────────────────────────
+        base_cols   = ['name', 'code', 'market', 'price', 'score', 'module1', 'module2', 'module3', 'module4']
+        base_heads  = ['종목명', '코드', '시장', '현재가', '최종점수', 'M1(추세)', 'M2(거래량)', 'M3(매수조건)', 'M4(R:R)']
+
+        if has_m5:
+            extra_cols  = base_cols  + ['module5', 'vs_kospi', 'verdict']
+            extra_heads = base_heads + ['M5(시장강도)', '코스피대비(%p)', '레이더판정']
+        else:
+            extra_cols  = base_cols
+            extra_heads = base_heads
+
+        display_df = res_df[extra_cols].copy()
+        display_df.columns = extra_heads
+        display_df['현재가'] = display_df['현재가'].apply(lambda x: f"{x:,.0f}원")
+
+        # 점수 색상 하이라이트용 스타일
+        def color_score(val):
+            try:
+                v = int(val)
+                if v >= 75: return 'background-color:#d4edda; color:#155724; font-weight:bold'
+                elif v >= 55: return 'background-color:#fff3cd; color:#856404; font-weight:bold'
+                else: return 'background-color:#f8d7da; color:#721c24'
+            except:
+                return ''
+
+        styled = display_df.style.applymap(color_score, subset=['최종점수'])
+        st.dataframe(styled, use_container_width=True, height=400)
+
+        # ── 상세 점수 카드 ────────────────────────────────────────────
+        with st.expander("📊 종목별 상세 점수 분석 카드"):
+            for i, (_, row) in enumerate(res_df.iterrows()):
+                verdict_str = row.get('verdict') or ''
+                vs_str      = f"{row['vs_kospi']:+.2f}%p" if row.get('vs_kospi') is not None else 'N/A'
+                m5_str      = f"{int(row['module5'])}점" if row.get('module5') is not None else 'N/A (레이더 미실행)'
+                score       = int(row['score'])
+                badge       = "🟢 강력 매수" if score >= 75 else "🟡 신중 매수" if score >= 55 else "🔴 관망"
+
+                st.markdown(f"""
+**{i+1}. {row['name']}** `{row['code']}` · {row['market']} &nbsp; {badge}
+""")
+                cols_card = st.columns([1.2, 1, 1, 1, 1, 1])
+                cols_card[0].metric("최종점수",  f"{score}점")
+                cols_card[1].metric("M1 추세",   f"{row['module1']}점")
+                cols_card[2].metric("M2 거래량", f"{row['module2']}점")
+                cols_card[3].metric("M3 조건",   f"{row['module3']}점")
+                cols_card[4].metric("M4 R:R",    f"{row['module4']}점")
+                cols_card[5].metric("M5 시장강도", m5_str)
+
+                detail_cols = st.columns(4)
+                detail_cols[0].write(f"📈 거래량: {row['volume_ratio']:.2f}배")
+                detail_cols[1].write(f"✅ 조건: {row['conditions']}/4")
+                detail_cols[2].write(f"⚖️ R:R = {row['rr_ratio']:.2f}:1")
+                detail_cols[3].write(f"📡 코스피대비 {vs_str}  {verdict_str}")
+                st.markdown("---")
+
+        # ── 점수 비교 차트 (모듈별 누적 바) ──────────────────────────────
+        st.markdown("### 📊 종목별 투자 적합도 점수 비교")
+
+        chart_names = res_df['name'].tolist()
+        m1_vals = res_df['module1'].tolist()
+        m2_vals = res_df['module2'].tolist()
+        m3_vals = res_df['module3'].tolist()
+        m4_vals = res_df['module4'].tolist()
+
+        if has_m5:
+            m5_vals = [v if v is not None else 0 for v in res_df['module5'].tolist()]
+        else:
+            m5_vals = None
+
+        fig_compare = go.Figure()
+        # 총 점수 오버레이 (마커)
+        fig_compare.add_trace(go.Scatter(
+            x=chart_names,
+            y=res_df['score'].tolist(),
+            mode='markers+text',
+            text=[f"<b>{s}</b>" for s in res_df['score'].tolist()],
+            textposition='top center',
+            marker=dict(
+                size=14,
+                color=['#28a745' if s >= 75 else '#ffc107' if s >= 55 else '#dc3545'
+                       for s in res_df['score'].tolist()],
+                symbol='diamond'
+            ),
+            name='최종점수',
+            yaxis='y2'
+        ))
+        # 모듈별 누적 바
+        weight_label = '(각 20%)' if has_m5 else '(각 25%)'
+        fig_compare.add_trace(go.Bar(x=chart_names, y=m1_vals, name=f'M1 추세 {weight_label}',    marker_color='#4A90D9'))
+        fig_compare.add_trace(go.Bar(x=chart_names, y=m2_vals, name=f'M2 거래량 {weight_label}',  marker_color='#50C878'))
+        fig_compare.add_trace(go.Bar(x=chart_names, y=m3_vals, name=f'M3 조건 {weight_label}',    marker_color='#FF8C42'))
+        fig_compare.add_trace(go.Bar(x=chart_names, y=m4_vals, name=f'M4 R:R {weight_label}',     marker_color='#9B59B6'))
+        if m5_vals:
+            fig_compare.add_trace(go.Bar(x=chart_names, y=m5_vals, name=f'M5 시장강도 (20%)', marker_color='#E74C3C'))
+
+        fig_compare.add_hline(y=75, line_dash="dash", line_color="green",
+                              annotation_text="🟢 강력 매수 (75점)", annotation_position="top right")
+        fig_compare.add_hline(y=55, line_dash="dash", line_color="orange",
+                              annotation_text="🟡 신중 매수 (55점)", annotation_position="top right")
+
+        fig_compare.update_layout(
+            title=f"투자 적합도 모듈별 점수 분해 {'(M5 시장강도 포함)' if has_m5 else '(M1~M4)'}",
+            barmode='group',
+            xaxis_title="종목명",
+            yaxis_title="모듈 점수 (0-100)",
+            yaxis2=dict(title='최종점수', overlaying='y', side='right', range=[0, 110]),
+            height=520,
+            legend=dict(orientation='h', yanchor='bottom', y=1.02)
+        )
         st.plotly_chart(fig_compare, use_container_width=True)
 
-        # 초기화 버튼
-        if st.button("🔄 다시 검색"):
+        # ── 초기화 버튼 ──────────────────────────────────────────────
+        if st.button("🔄 다시 검색", key="scan_reset_btn"):
             st.session_state.scan_mode = None
             st.session_state.scan_results = None
             st.rerun()
 
-        elif st.session_state.scan_mode and st.session_state.scan_results is not None and st.session_state.scan_results.empty:
-            st.warning("⚠️ 조건에 맞는 종목이 없습니다. 기준을 낮춰보세요.")
+    elif st.session_state.scan_mode and st.session_state.scan_results is not None and st.session_state.scan_results.empty:
+        st.warning("⚠️ 조건에 맞는 종목이 없습니다. 기준을 낮춰보세요.")
 
 # ================================================
 # TAB 3: 개별 종목 분석
@@ -1206,87 +1389,79 @@ with tab3:
 
     if avg_volume > 0:
         volume_ratio = current_volume / avg_volume
-
-        if volume_ratio >= 2.0:
-            breakout = "높음 🟢"
-            volume_score = 90
+        # 연속형 점수: 거래량 배율에 비례 (20~95)
+        raw_vscore = min(95, max(20, volume_ratio * 38 + 10))
+        if volume_ratio >= 3.0:
+            breakout = "필펭 폭등 🟢🟢"
+            volume_score = 95
+        elif volume_ratio >= 2.0:
+            breakout = "높음 폽등 🟢"
+            volume_score = min(95, raw_vscore + 5)
         elif volume_ratio >= 1.5:
-            breakout = "중상 🟢"
-            volume_score = 75
-        elif volume_ratio >= 1.2:
-            breakout = "중간 🟡"
-            volume_score = 60
-        elif volume_ratio >= 0.8:
+            breakout = "중상 폭등 🟢"
+            volume_score = raw_vscore
+        elif volume_ratio >= 1.0:
             breakout = "보통 🟡"
-            volume_score = 45
+            volume_score = raw_vscore
         else:
-            breakout = "낮음 🔴"
-            volume_score = 25
+            breakout = "낙음 🔴"
+            volume_score = raw_vscore
     else:
         volume_ratio = 0
         breakout = "부족"
-        volume_score = 50
+        volume_score = 45
 
     module2_score = int(volume_score)
 
-    # 모듈 3
+    # 모듈 3 (세분화: 조건 품질 보너스 포함)
     cond1 = current_price > ma120
     high_20d = float(hist['Close'].tail(20).max())
-    cond2 = current_price >= high_20d
+    low_20d  = float(hist['Close'].tail(20).min())
+    cond2 = current_price >= high_20d * 0.95   # 20일 고점 근처
 
     if len(hist) >= 2:
         pct_chg = ((current_price - float(hist['Close'].iloc[-2])) / float(hist['Close'].iloc[-2])) * 100
-        cond3 = -2 <= pct_chg <= 15  # -2%~+15% 범위로 완화
+        cond3 = -2 <= pct_chg <= 15
     else:
         pct_chg = 0
         cond3 = False
 
-    cond4 = volume_ratio >= 1.5  # 1.5배로 완화
-
+    cond4 = volume_ratio >= 1.5
     satisfied = sum([cond1, cond2, cond3, cond4])
 
-    if satisfied == 4:
-        module3_score = 100
-    elif satisfied == 3:
-        module3_score = 80
-    elif satisfied == 2:
-        module3_score = 60
-    elif satisfied == 1:
-        module3_score = 40
-    else:
-        module3_score = 20
+    # 기본 점수
+    base3 = {4: 80, 3: 63, 2: 46, 1: 30, 0: 15}[satisfied]
+    # 품질 보너스 (최대 20점)
+    qbonus = 0
+    if cond1 and ma120 > 0:
+        qbonus += min(5, (current_price - ma120) / ma120 * 100 * 0.5)
+    if high_20d > low_20d:
+        qbonus += min(5, (current_price - low_20d) / (high_20d - low_20d) * 5)
+    if cond3 and 3 <= pct_chg <= 10:
+        qbonus += 5
+    elif cond3 and 0 < pct_chg < 3:
+        qbonus += 3
+    if cond4:
+        qbonus += min(5, (volume_ratio - 1.5) * 2.5)
+    module3_score = min(100, int(base3 + qbonus))
 
-    # 모듈 4
+    # 모듈 4 (연속형 R:R 점수)
     sl_methods = {
         'open': float(latest['Open']),
-        'low': float(latest['Low']),
+        'low':  float(latest['Low']),
         '3pct': current_price * 0.97,
-        '5pct': current_price * 0.95,
         'ma20': ma20
     }
-
     final_sl = max(sl_methods.values())
-    risk_pct = ((final_sl - current_price) / current_price) * 100
-    target = current_price + abs(current_price - final_sl) * 2
+    risk_pct   = ((final_sl - current_price) / current_price) * 100
+    target     = current_price + abs(current_price - final_sl) * 2
     reward_pct = ((target - current_price) / current_price) * 100
 
-    # 모듈 4 점수 계산
-    risk_reward_ratio = abs(reward_pct / risk_pct) if risk_pct != 0 else 0
+    risk_reward_ratio = abs(reward_pct / risk_pct) if risk_pct != 0 else 1.0
+    # 연속형 점수: R:R에 비례 (20~95)
+    module4_score = min(95, max(20, int(risk_reward_ratio * 28 + 18)))
 
-    if risk_reward_ratio >= 2.5:
-        module4_score = 95
-    elif risk_reward_ratio >= 2.0:
-        module4_score = 85
-    elif risk_reward_ratio >= 1.5:
-        module4_score = 70
-    elif risk_reward_ratio >= 1.0:
-        module4_score = 50
-    else:
-        module4_score = 30
-
-    module4_score = int(module4_score)
-
-    # **최종 점수**
+    # **최종 점수** (4모듈 각 25%)
     final_score = int(module1_score * 0.25 + module2_score * 0.25 + module3_score * 0.25 + module4_score * 0.25)
 
     # ========== 상세 분석 UI (이전과 동일) ==========
