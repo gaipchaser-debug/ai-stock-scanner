@@ -697,6 +697,68 @@ def get_normalized_chart(ticker, kospi_hist):
     except:
         return None, None
 
+
+@st.cache_data(ttl=3600)
+def get_defense_rate(ticker, period="2mo"):
+    """
+    2개월 동안 코스피 하락일에 해당 종목이 방어(상승+덜 하락)한 빈도수 계산
+    Returns dict: total_down_days, defense_days, defense_rate, reverse_days, reverse_rate, avg_gap_down
+    """
+    try:
+        k = yf.Ticker("^KS11")
+        kospi_hist = k.history(period=period)
+        s = yf.Ticker(ticker)
+        stock_hist = s.history(period=period)
+
+        if kospi_hist.empty or stock_hist.empty:
+            return None
+
+        # tz 제거 후 공통 날짜 정렬
+        try:
+            kospi_hist.index = kospi_hist.index.tz_localize(None)
+        except Exception:
+            kospi_hist.index = kospi_hist.index.tz_convert(None)
+        try:
+            stock_hist.index = stock_hist.index.tz_localize(None)
+        except Exception:
+            stock_hist.index = stock_hist.index.tz_convert(None)
+
+        k_ret = kospi_hist['Close'].pct_change().dropna() * 100
+        s_ret = stock_hist['Close'].pct_change().dropna() * 100
+
+        common_idx = k_ret.index.intersection(s_ret.index)
+        if len(common_idx) < 10:
+            return None
+
+        k_ret = k_ret[common_idx]
+        s_ret = s_ret[common_idx]
+
+        down_mask  = k_ret < 0
+        total_down = int(down_mask.sum())
+
+        if total_down == 0:
+            return {'total_down_days': 0, 'defense_days': 0, 'defense_rate': 0.0,
+                    'reverse_days': 0, 'reverse_rate': 0.0, 'avg_gap_down': 0.0, 'period': period}
+
+        vs_on_down   = s_ret[down_mask] - k_ret[down_mask]
+        defense_days = int((vs_on_down > 0).sum())
+        reverse_days = int((s_ret[down_mask] > 0).sum())
+        defense_rate = round(defense_days / total_down * 100, 1)
+        reverse_rate = round(reverse_days / total_down * 100, 1)
+        avg_gap      = round(float(vs_on_down.mean()), 2)
+
+        return {
+            'total_down_days': total_down,
+            'defense_days':    defense_days,
+            'defense_rate':    defense_rate,
+            'reverse_days':    reverse_days,
+            'reverse_rate':    reverse_rate,
+            'avg_gap_down':    avg_gap,
+            'period':          period,
+        }
+    except Exception:
+        return None
+
 def run_radar_scan(top50_list):
     """시장 레이더 스캔: 시총 상위 50종목 vs 코스피"""
     kospi_current, kospi_change, kospi_pt, kospi_hist = get_kospi_status()
@@ -794,7 +856,7 @@ with tab1:
     st.markdown("""
     > 📌 **어떻게 활용할까요?**  
     > 코스피가 하락하는 날, 오히려 **상승** 하거나 **덜 떨어지는 종목**이 진짜 알짜배기 주식입니다.  
-    > 시잔 1위~50위 종목의 오늘 등락률을 코스피와 비교하여 **매일 관찰 훈련**을 시작하세요.
+    > 시장 1위~50위 종목의 오늘 등락률을 코스피와 비교하여 **매일 관찰 훈련**을 시작하세요.
     """)
 
     # 코스피 실시간 지수
@@ -1012,6 +1074,117 @@ with tab1:
                 height=500
             )
             st.plotly_chart(fig_norm, use_container_width=True)
+
+        st.markdown("---")
+
+        # ====== 시각화 4: 2개월 방어율 분석 ======
+        st.markdown("### 🛡️ 2개월 하락장 방어율 분석")
+        st.caption(
+            "코스피가 하락한 날 중, 이 종목이 코스피보다 선방(덜 하락 또는 오히려 상승)한 날의 비율입니다. "
+            "높을수록 하락장에 강한 '알짜배기 주식'입니다."
+        )
+
+        with st.spinner("📊 2개월 방어율 계산 중... (종목당 약 1초)"):
+            defense_rows = []
+            tickers_to_analyze = view_df.head(20)['ticker'].tolist()
+            names_to_analyze   = view_df.head(20)['name'].tolist()
+
+            dprog = st.progress(0)
+            for di, (dticker, dname) in enumerate(zip(tickers_to_analyze, names_to_analyze)):
+                dprog.progress((di + 1) / len(tickers_to_analyze))
+                dr = get_defense_rate(dticker, period="2mo")
+                if dr:
+                    # 방어력 등급
+                    if dr['defense_rate'] >= 70:
+                        d_grade = "⭐⭐⭐ 최강 방어"
+                        d_color = "#28a745"
+                    elif dr['defense_rate'] >= 55:
+                        d_grade = "⭐⭐ 강한 방어"
+                        d_color = "#85c720"
+                    elif dr['defense_rate'] >= 40:
+                        d_grade = "⭐ 보통 방어"
+                        d_color = "#ffc107"
+                    else:
+                        d_grade = "🔴 취약"
+                        d_color = "#dc3545"
+
+                    defense_rows.append({
+                        "종목명":        dname,
+                        "코스피하락일":  dr['total_down_days'],
+                        "방어성공일":    dr['defense_days'],
+                        "방어율(%)":     dr['defense_rate'],
+                        "역주행일":      dr['reverse_days'],
+                        "역주행율(%)":   dr['reverse_rate'],
+                        "평균초과(%p)":  dr['avg_gap_down'],
+                        "방어등급":      d_grade,
+                    })
+            dprog.empty()
+
+        if defense_rows:
+            def_df = pd.DataFrame(defense_rows).sort_values("방어율(%)", ascending=False)
+
+            # 방어율 컬러 스타일
+            def color_defense(val):
+                try:
+                    v = float(val)
+                    if v >= 70: return "background-color:#d4edda; color:#155724; font-weight:bold"
+                    elif v >= 55: return "background-color:#fff3cd; color:#856404; font-weight:bold"
+                    elif v >= 40: return "background-color:#fff8e1; color:#6d4c00"
+                    else: return "background-color:#f8d7da; color:#721c24"
+                except:
+                    return ""
+
+            def_styled = def_df.style.applymap(color_defense, subset=["방어율(%)"])
+            st.dataframe(def_styled, use_container_width=True, height=400)
+
+            # 방어율 수평 막대차트
+            fig_def = go.Figure()
+            fig_def.add_trace(go.Bar(
+                y=def_df["종목명"],
+                x=def_df["방어율(%)"],
+                orientation='h',
+                name="방어율",
+                marker_color=[
+                    "#28a745" if v >= 70 else "#85c720" if v >= 55 else "#ffc107" if v >= 40 else "#dc3545"
+                    for v in def_df["방어율(%)"]
+                ],
+                text=[f"{v:.1f}%" for v in def_df["방어율(%)"]],
+                textposition='outside',
+            ))
+            fig_def.add_trace(go.Bar(
+                y=def_df["종목명"],
+                x=def_df["역주행율(%)"],
+                orientation='h',
+                name="역주행율(코스피↓ + 종목↑)",
+                marker_color="gold",
+                text=[f"{v:.1f}%" for v in def_df["역주행율(%)"]],
+                textposition='outside',
+                visible='legendonly'
+            ))
+            fig_def.add_vline(x=50, line_dash="dash", line_color="gray",
+                              annotation_text="50% 기준선", annotation_position="top")
+            fig_def.update_layout(
+                title="2개월 코스피 하락일 방어율 비교 (높을수록 하락장에 강한 종목)",
+                xaxis_title="방어율 (%)",
+                xaxis=dict(range=[0, 115]),
+                height=max(350, len(def_df) * 28),
+                barmode='overlay',
+                legend=dict(orientation='h', yanchor='bottom', y=1.02),
+            )
+            st.plotly_chart(fig_def, use_container_width=True)
+
+            st.info("""
+**📌 방어율 해석 가이드**
+- **방어율**: 코스피 하락일 중 해당 종목이 코스피보다 선방(덜 떨어지거나 오히려 상승)한 비율  
+- **역주행율**: 코스피 하락일 중 해당 종목이 아예 상승한 비율 (더 희귀하고 더 가치 있음)  
+- **평균초과(%p)**: 코스피 하락일 평균적으로 코스피보다 몇 %p 앞섰는지  
+- ⭐⭐⭐ **70% 이상**: 최강 방어주 — 하락장에서도 굳건한 진짜 알짜배기  
+- ⭐⭐ **55~69%**: 강한 방어주 — 시장보다 확실히 강함  
+- ⭐ **40~54%**: 보통 — 시장 평균 수준  
+- 🔴 **40% 미만**: 취약 — 하락장에서 시장보다 더 떨어지는 경향  
+            """)
+        else:
+            st.warning("⚠️ 방어율 데이터를 가져올 수 없습니다.")
 
         st.markdown("---")
 
