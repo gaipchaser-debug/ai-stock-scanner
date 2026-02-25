@@ -28,6 +28,8 @@ if 'scan_mode' not in st.session_state:
     st.session_state.scan_mode = None
 if 'radar_results' not in st.session_state:
     st.session_state.radar_results = None
+if 'radar_scan_mode' not in st.session_state:
+    st.session_state.radar_scan_mode = None
 if 'radar_kospi_change' not in st.session_state:
     st.session_state.radar_kospi_change = None
 if 'radar_kospi_current' not in st.session_state:
@@ -711,6 +713,62 @@ TOP50_FALLBACK = [
     ("263750", "펄어비스",       "KOSDAQ"),
 ]
 
+# 시총 상위 51~100위 폴백 리스트 (2025 기준)
+TOP100_EXTRA = [
+    ("032640", "LG유플러스",        "KOSPI"),
+    ("010140", "삼성중공업",         "KOSPI"),
+    ("047050", "포스코인터내셔널",    "KOSPI"),
+    ("003670", "포스코퓨처엠",       "KOSPI"),
+    ("012450", "한화에어로스페이스",  "KOSPI"),
+    ("011070", "LG이노텍",           "KOSPI"),
+    ("000720", "현대건설",           "KOSPI"),
+    ("267260", "현대글로비스",        "KOSPI"),
+    ("000210", "대림산업",           "KOSPI"),
+    ("011790", "SKC",               "KOSPI"),
+    ("139480", "이마트",             "KOSPI"),
+    ("004020", "현대제철",           "KOSPI"),
+    ("326030", "SK바이오팜",         "KOSPI"),
+    ("180640", "한진칼",             "KOSPI"),
+    ("271560", "오리온",             "KOSPI"),
+    ("036570", "엔씨소프트",         "KOSPI"),
+    ("021240", "코웨이",             "KOSPI"),
+    ("034020", "두산에너빌리티",      "KOSPI"),
+    ("097950", "CJ제일제당",         "KOSPI"),
+    ("402340", "SK스퀘어",           "KOSPI"),
+    ("003600", "SK케미칼",           "KOSPI"),
+    ("011250", "한화솔루션",         "KOSPI"),
+    ("009240", "한샘",               "KOSPI"),
+    ("069960", "현대백화점",         "KOSPI"),
+    ("009830", "한화",               "KOSPI"),
+    ("004170", "신세계",             "KOSPI"),
+    ("000880", "한화",               "KOSPI"),
+    ("006800", "미래에셋증권",        "KOSPI"),
+    ("071050", "한국금융지주",        "KOSPI"),
+    ("015610", "선진",               "KOSPI"),
+    ("377300", "카카오페이",         "KOSPI"),
+    ("323410", "카카오뱅크",         "KOSPI"),
+    ("005940", "NH투자증권",         "KOSPI"),
+    ("016360", "삼성증권",           "KOSPI"),
+    ("000240", "한국타이어앤테크놀로지","KOSPI"),
+    ("007070", "GS리테일",           "KOSPI"),
+    ("003490", "대한항공",           "KOSPI"),
+    ("000070", "삼양홀딩스",         "KOSPI"),
+    ("010060", "OCI홀딩스",          "KOSPI"),
+    ("001040", "CJ",                "KOSPI"),
+    ("011160", "롯데케미칼",         "KOSPI"),
+    ("000060", "메리츠화재",         "KOSPI"),
+    ("138040", "메리츠금융지주",      "KOSPI"),
+    ("204320", "만도",               "KOSPI"),
+    ("000670", "영풍",               "KOSPI"),
+    ("357780", "솔브레인",           "KOSDAQ"),
+    ("293490", "카카오게임즈",        "KOSDAQ"),
+    ("041510", "에스엠",             "KOSDAQ"),
+    ("214150", "클래시스",           "KOSDAQ"),
+    ("145020", "휴젤",               "KOSDAQ"),
+]
+# TOP50 + TOP100_EXTRA = 전체 100종목 폴백
+TOP100_FALLBACK = TOP50_FALLBACK + TOP100_EXTRA
+
 @st.cache_data(ttl=300)  # 5분 캐시
 def get_kospi_status():
     """코스피 현재 지수 및 등락률"""
@@ -821,16 +879,16 @@ def get_defense_rate(ticker, period="2mo"):
     except Exception:
         return None
 
-def run_radar_scan(top50_list):
-    """시장 레이더 스캔: 시총 상위 50종목 vs 코스피"""
+def run_radar_scan(stock_list):
+    """시장 레이더 스캔: stock_list의 종목 vs 코스피 (최대 100종목 지원)"""
     kospi_current, kospi_change, kospi_pt, kospi_hist = get_kospi_status()
 
     results = []
     progress_bar = st.progress(0)
     status_text  = st.empty()
-    total = len(top50_list)
+    total = len(stock_list)
 
-    for i, (code, name, market) in enumerate(top50_list):
+    for i, (code, name, market) in enumerate(stock_list):
         suffix = ".KS" if market == "KOSPI" else ".KQ"
         ticker = f"{code}{suffix}"
 
@@ -942,51 +1000,78 @@ with tab1:
         with c3:
             st.metric("평가 기준", "75점 이상", "투자 적합")
         with c4:
-            st.metric("스캔 대상", "시총상위 50종목", "스스로 학습")
+            _rmode = st.session_state.get('radar_scan_mode') or 'top50'
+            _n_disp = "100종목" if _rmode == 'top100' else "50종목"
+            st.metric("스캔 대상", f"시총상위 {_n_disp}", "코스피 비교")
     else:
         st.warning("⚠️ 코스피 지수 로드 실패. 잠시 훈 다시 시도하세요.")
 
     st.markdown("---")
 
     # 레이더 실행 버튼
-    col_r1, col_r2 = st.columns([2, 1])
+    # ── 레이더 실행 버튼 (시총 50위 / 시총 100위 / 초기화) ──────────────
+    st.markdown("""
+    <div style='background:#F0F4FF; border-left:4px solid #3A86FF;
+         padding:8px 14px; border-radius:6px; margin-bottom:8px; font-size:13px;'>
+    📡 <b>시총 50위</b>: 약 1~2분 · 빠른 확인 &nbsp;|&nbsp;
+    🌐 <b>시총 100위</b>: 약 2~4분 · 더 넓은 시장 커버리지
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_r1, col_r2, col_r3 = st.columns([2, 2, 1])
     with col_r1:
-        radar_btn = st.button("📡 시장 레이더 스캔 실행 (시총 50위, 약 1-2분)",
-                              type="primary", use_container_width=True)
+        radar_btn_50  = st.button("📡 시장 레이더 스캔 (시총 50위, 약 1-2분)",
+                                  type="primary", use_container_width=True)
     with col_r2:
-        if st.button("🔄 레이더 새로고침", use_container_width=True):
-            st.session_state.radar_results = None
+        radar_btn_100 = st.button("🌐 전체종목 스캔 (시총 100위, 약 2-4분)",
+                                  type="secondary", use_container_width=True,
+                                  help="시총 상위 100개 종목으로 더 넓은 레이더 스캔을 실행합니다.")
+    with col_r3:
+        if st.button("🔄 초기화", use_container_width=True,
+                     help="캐시와 스캔 결과를 초기화합니다."):
+            st.session_state.radar_results    = None
+            st.session_state.radar_scan_mode  = None
             st.session_state.radar_kospi_change = None
             get_kospi_status.clear()
             get_stock_today_change.clear()
             st.rerun()
 
-    if radar_btn:
-        st.session_state.radar_results = None
+    # 버튼 클릭 시 모드 세팅
+    if radar_btn_50:
+        st.session_state.radar_results   = None
+        st.session_state.radar_scan_mode = 'top50'
+    if radar_btn_100:
+        st.session_state.radar_results   = None
+        st.session_state.radar_scan_mode = 'top100'
 
-    # 킱 해상도 지사용 여부 포소트 (레이더 ON 시)
-    if st.session_state.radar_results is None and radar_btn:
-        # 스캔 실행
-        st.info("🔍 시총 상위 50종목 스캔 시작...")
-        # FinanceDataReader로 실제 시총 상위 50 가져오기 (가능하면)
-        top50_list = TOP50_FALLBACK  # 폴백 사용
+    # ── 스캔 실행 ────────────────────────────────────────────────────────
+    if st.session_state.radar_results is None and st.session_state.radar_scan_mode in ('top50', 'top100'):
+        mode = st.session_state.radar_scan_mode
+        n_target = 100 if mode == 'top100' else 50
+
+        st.info(f"🔍 시총 상위 {n_target}종목 스캔 시작...")
+
+        # FDR로 실시간 시총 순위 우선 사용, 실패 시 폴백
+        scan_list = (TOP100_FALLBACK if mode == 'top100' else TOP50_FALLBACK)
+
         if all_stocks_df is not None and not all_stocks_df.empty:
             try:
-                # FinanceDataReader는 시총 순으로 정렬된 경우가 많음
-                top_df = all_stocks_df.head(50)
-                top50_list = [
+                top_df = all_stocks_df.head(n_target)
+                scan_list = [
                     (str(r['Code']), str(r['Name']), str(r['Market']))
                     for _, r in top_df.iterrows()
                 ]
             except:
-                top50_list = TOP50_FALLBACK
+                scan_list = (TOP100_FALLBACK if mode == 'top100' else TOP50_FALLBACK)
 
-        with st.spinner("📡 시장 레이더 스캔 중..."):
-            radar_df, k_val, k_chg, k_hist = run_radar_scan(top50_list)
+        spinner_msg = (f"📡 시장 레이더 스캔 중... ({n_target}종목 · "
+                       f"{'약 2~4분' if mode == 'top100' else '약 1~2분'})")
+        with st.spinner(spinner_msg):
+            radar_df, k_val, k_chg, k_hist = run_radar_scan(scan_list)
 
-        st.session_state.radar_results = radar_df
+        st.session_state.radar_results      = radar_df
         st.session_state.radar_kospi_change = k_chg
-        st.session_state.radar_kospi_current = k_val
+        st.session_state.radar_kospi_current= k_val
         st.rerun()
 
     # 레이더 결과 표시
@@ -994,6 +1079,14 @@ with tab1:
         radar_df = st.session_state.radar_results
         k_chg    = st.session_state.radar_kospi_change or 0
         k_val    = st.session_state.radar_kospi_current or 0
+
+        # 스캔 모드 배지 표시
+        _cur_mode = st.session_state.get('radar_scan_mode') or 'top50'
+        _mode_label = ("🌐 **시총 100위 전체종목 스캔** 결과"
+                       if _cur_mode == 'top100' else
+                       "📡 **시총 50위 레이더 스캔** 결과")
+        _n_scanned = len(radar_df)
+        st.success(f"{_mode_label} — {_n_scanned}개 종목 분석 완료")
 
         # 필터 탭
         filter_opt = st.radio(
