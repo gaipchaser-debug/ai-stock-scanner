@@ -1,3 +1,14 @@
+이전 오류(길이 불일치)를 피하기 위해 화면에서 표시할 데이터 개수를 조정하는 과정에서, 내부적으로 종목을 매칭할 때 꼭 필요한 핵심 고유 키인 **`ticker`** 데이터까지 함께 삭제되면서 발생한 오류(`KeyError: 'ticker'`)입니다.
+
+화면에 예쁘게 표를 그리는 기능과 내부적으로 AI 모듈이 데이터를 주고받는 기능을 완벽하게 분리하여, **더 이상 충돌이 발생하지 않도록 코드를 안전하게 최적화**했습니다.
+
+기존 `app.py` 내용을 **전체 선택(Ctrl+A) 후 삭제**하신 뒤, 아래의 최종 코드로 한 번만 덮어쓰기 해주세요!
+
+---
+
+### 💻 완벽 수정된 최종 코드 (`app.py`)
+
+```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -177,7 +188,17 @@ def calculate_stock_score(hist, current_price, vs_kospi=None, verdict=None):
     except: return 0, {}
 
 def scan_stocks(stock_list, mode='quick'):
-    results, radar_lookup = [], {r['ticker']: {'vs_kospi': r.get('vs_kospi'), 'verdict': r.get('verdict')} for _, r in st.session_state.get('radar_results', pd.DataFrame()).iterrows()} if st.session_state.get('radar_results') is not None else {}
+    results = []
+    radar_lookup = {}
+    
+    # [수정포인트] KeyError 방지를 위한 안전한 딕셔너리 생성
+    radar_df = st.session_state.get('radar_results')
+    if radar_df is not None and not radar_df.empty and 'ticker' in radar_df.columns:
+        radar_lookup = {
+            r['ticker']: {'vs_kospi': r.get('vs_kospi'), 'verdict': r.get('verdict')} 
+            for _, r in radar_df.iterrows()
+        }
+        
     stocks_to_scan = stock_list.head(100) if mode == 'quick' else stock_list
     progress_bar, status_text = st.progress(0), st.empty()
     for idx, (df_idx, row) in enumerate(stocks_to_scan.iterrows()):
@@ -234,8 +255,9 @@ def run_radar_scan(stock_list):
         elif vs_kospi > -1.0: verdict = "➖ 동행"
         else: verdict = "🔴 이탈"
 
-        # 정확히 8개의 키를 가진 딕셔너리 생성
+        # [수정포인트] ticker 정보를 내부 유지용으로 반드시 포함시킵니다.
         results.append({
+            "ticker": ticker, 
             "code": code,
             "name": name,
             "market": market,
@@ -384,15 +406,25 @@ with tab1:
     if st.session_state.radar_results is not None and not st.session_state.radar_results.empty:
         df_radar = st.session_state.radar_results.copy()
         
-        # 생성된 데이터프레임의 8개 컬럼에 맞춰 이름 부여
-        df_radar.columns = ['종목코드', '종목명', '시장', '현재가', '등락률(%)', 'vs코스피(%p)', '거래량배율', '판정']
+        # [수정포인트] 컬럼명 변경을 덮어쓰기 방식이 아닌 rename() 메서드로 안전하게 처리
+        rename_dict = {
+            'code': '종목코드',
+            'name': '종목명',
+            'market': '시장',
+            'price': '현재가',
+            'change_pct': '등락률(%)',
+            'vs_kospi': 'vs코스피(%p)',
+            'vol_ratio': '거래량배율',
+            'verdict': '판정'
+        }
+        df_radar = df_radar.rename(columns=rename_dict)
         
         # 포맷팅
         df_radar['현재가'] = df_radar['현재가'].apply(lambda x: f"{x:,.0f}원")
         df_radar['등락률(%)'] = df_radar['등락률(%)'].apply(lambda x: f"{x:+.2f}%")
         df_radar['vs코스피(%p)'] = df_radar['vs코스피(%p)'].apply(lambda x: f"{x:+.2f}%p")
         
-        # 화면에 6개 주요 정보 표시
+        # 화면에 6개 주요 정보만 선택하여 표시 (ticker는 내부 연동용으로 숨김)
         st.dataframe(df_radar[['종목명', '시장', '현재가', '등락률(%)', 'vs코스피(%p)', '판정']], use_container_width=True)
 
 # ----- TAB 2: 투자 적합 종목 추천 -----
@@ -496,3 +528,5 @@ with tab4:
         * **최적 전략**: 과거 10년 동안 주가가 배당일 기준 며칠 전부터 가장 크게 올랐는지를 보여줍니다. (예: D-30일 매수)
         * **상태 판정**: 최적 매수 타이밍이 '오늘'과 얼마나 가까운지를 계산하여, 바로 사야 할지 기다려야 할지 알려줍니다.
         """)
+
+```
