@@ -1,4 +1,19 @@
+올려주신 오류 이미지들과 코드를 분석해보니 오류의 원인은 **'복사 붙여넣기(Copy & Paste) 과정에서의 충돌'**입니다.
 
+주요 원인은 다음과 같습니다.
+
+1. `SyntaxError: invalid syntax` (`python) : 코드를 복사하실 때 제가 작성해 드린 마크다운 코드 블록 기호(`python)까지 함께 복사되어 파이썬 문법 오류가 발생했습니다.
+2. `ValueError: Length mismatch` 및 중복 함수 오류 : 기존 `app.py`의 코드를 지우지 않고 그 아래에 계속 코드를 덧붙여서(Append) 넣으셨기 때문에, 동일한 함수가 2~3개씩 중복 생성되면서 데이터 열(Column) 개수가 맞지 않는 충돌이 발생했습니다.
+
+이 모든 문제를 깔끔하게 해결한 **최종 클린 버전의 전체 코드**를 제공해 드립니다.
+
+### 🚨 [필독] 이렇게 적용해 주세요!
+
+1. 현재 `app.py` 파일의 텍스트 편집기 창에서 **`Ctrl + A` (또는 Cmd + A)를 눌러 전체 선택**을 합니다.
+2. **`Delete` 키를 눌러 기존 코드를 전부 싹 지워주세요.** (완전히 빈 화면이 되어야 합니다)
+3. 아래의 코드를 복사할 때, 맨 위와 맨 아래에 있는 **`python** 이나 **`** 기호는 빼고, **`import streamlit as st` 부터 맨 마지막 줄까지만** 정확히 복사해서 붙여넣고 저장(`Ctrl + S`)해 주세요.
+
+---
 
 ### 💻 완벽 통합 최종 코드 (`app.py`)
 
@@ -33,12 +48,8 @@ if 'scan_mode' not in st.session_state:
     st.session_state.scan_mode = None
 if 'radar_results' not in st.session_state:
     st.session_state.radar_results = None
-if 'radar_scan_mode' not in st.session_state:
-    st.session_state.radar_scan_mode = None
 if 'radar_kospi_change' not in st.session_state:
     st.session_state.radar_kospi_change = None
-if 'radar_kospi_current' not in st.session_state:
-    st.session_state.radar_kospi_current = None
 if 'div_scan_results' not in st.session_state:
     st.session_state.div_scan_results = None
 
@@ -114,7 +125,8 @@ def calculate_rsi(data, period=14):
     delta = data['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    return 100 - (100 / (1 + (gain / loss)))
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
 
 # ========== 2. 사카타 5법 및 분석 알고리즘 ==========
 def detect_candle_pattern_advanced(hist):
@@ -129,19 +141,15 @@ def detect_candle_pattern_advanced(hist):
     price_pos = (c[-1] - low_20) / (high_20 - low_20) if high_20 > low_20 else 0.5
     details = {'rsi': current_rsi, 'volume_ratio': volume_ratio, 'price_position': price_pos * 100}
 
-    # 사카타 5법: 적삼병
     if (c[-3]>o[-3] and c[-2]>o[-2] and c[-1]>o[-1] and c[-3]<c[-2]<c[-1] and o[-3]<o[-2]<c[-3] and o[-2]<o[-1]<c[-2]):
         return "적삼병 (사카타5법) 🚀", 95, int(min(100, (volume_ratio*20) + (100-current_rsi)*0.5 + 40)), details
-    # 사카타 5법: 흑삼병
     if (c[-3]<o[-3] and c[-2]<o[-2] and c[-1]<o[-1] and c[-3]>c[-2]>c[-1] and c[-3]<o[-2]<o[-3] and c[-2]<o[-1]<o[-2]):
         return "흑삼병 (사카타5법) ⚠️", 10, int(min(100, current_rsi*0.8 + 40)), details
-    # 사카타 5법: 상승 삼법
     if (c[-5]>o[-5] and c[-4]<o[-4] and c[-3]<o[-3] and c[-2]<o[-2] and c[-5]>max(c[-4],c[-3],c[-2]) and o[-5]<min(c[-4],c[-3],c[-2]) and c[-1]>o[-1] and c[-1]>c[-5]):
         return "상승 삼법 (사카타5법) 📈", 90, 85, details
-    # 일반 상승 장악형
     if (c[-2]<o[-2] and c[-1]>o[-1] and last_body>prev_body*1.5 and c[-1]>o[-2] and o[-1]<c[-2]):
         return "상승 장악형 (Bullish Engulfing) 🟢", 80, int(min(30, (last_body/prev_body)*10) + (20 if 30<=current_rsi<=50 else 0) + min(25, volume_ratio*12.5)), details
-    # 일반 망치형
+    
     lower_shadow, upper_shadow = min(o[-1], c[-1]) - l[-1], h[-1] - max(o[-1], c[-1])
     if last_body > 0 and lower_shadow > last_body*2 and upper_shadow < last_body*0.5:
         return "해머형 (망치형) 🟢", 75, int(min(35, (lower_shadow/last_body)*12) + (25 if current_rsi<35 else 5) + min(20, volume_ratio*10)), details
@@ -151,16 +159,9 @@ def calculate_stock_score(hist, current_price, vs_kospi=None, verdict=None):
     try:
         if len(hist) < 20: return 0, {}
         hist = hist.copy()
-        hist['MA5'] = hist['Close'].rolling(5).mean()
-        hist['MA20'] = hist['Close'].rolling(20).mean()
-        hist['MA60'] = hist['Close'].rolling(60).mean()
-        hist['MA120'] = hist['Close'].rolling(120).mean()
-        
+        hist['MA5'], hist['MA20'], hist['MA60'], hist['MA120'] = hist['Close'].rolling(5).mean(), hist['Close'].rolling(20).mean(), hist['Close'].rolling(60).mean(), hist['Close'].rolling(120).mean()
         latest = hist.iloc[-1]
-        ma5 = float(latest['MA5']) if pd.notna(latest['MA5']) else current_price
-        ma20 = float(latest['MA20']) if pd.notna(latest['MA20']) else current_price
-        ma60 = float(latest['MA60']) if pd.notna(latest['MA60']) else current_price
-        ma120 = float(latest['MA120']) if pd.notna(latest['MA120']) else current_price
+        ma5, ma20, ma60, ma120 = float(latest['MA5']) if pd.notna(latest['MA5']) else current_price, float(latest['MA20']) if pd.notna(latest['MA20']) else current_price, float(latest['MA60']) if pd.notna(latest['MA60']) else current_price, float(latest['MA120']) if pd.notna(latest['MA120']) else current_price
 
         pattern_name, candle_score, _, _ = detect_candle_pattern_advanced(hist)
         
@@ -253,11 +254,17 @@ def run_radar_scan(stock_list):
         elif vs_kospi > -1.0: verdict = "➖ 동행"
         else: verdict = "🔴 이탈"
 
+        # 정확히 8개의 키를 가진 딕셔너리 생성
         results.append({
-            "code": code, "ticker": ticker, "name": name, "market": market,
-            "price": price, "change_pct": round(chg, 2), "vs_kospi": round(vs_kospi, 2),
-            "vol_ratio": round(vol_ratio, 2), "verdict": verdict
-        }) # 정확히 9개 컬럼을 리턴
+            "code": code,
+            "name": name,
+            "market": market,
+            "price": price,
+            "change_pct": round(chg, 2),
+            "vs_kospi": round(vs_kospi, 2),
+            "vol_ratio": round(vol_ratio, 2),
+            "verdict": verdict
+        })
         
     progress_bar.empty()
     status_text.empty()
@@ -300,7 +307,7 @@ def analyze_dividend_rally_and_project(ticker, investment_amount):
         if future_dates: next_d_day = future_dates[0]
         else: return None
             
-        # 2. 과거 10년 최적 배당 랠리 매수타점 (D-15, D-30, D-45 중 최적화)
+        # 2. 과거 10년 최적 배당 랠리 매수타점 (D-15, D-30, D-45, D-60 중 최적화)
         test_windows = [15, 30, 45, 60] 
         sell_offset = 2 # 배당락일 2일 전 매도 (고정)
         
@@ -337,11 +344,12 @@ def analyze_dividend_rally_and_project(ticker, investment_amount):
 
         current_price = float(hist.iloc[-1]['Close'])
         expected_profit = investment_amount * (best_ret / 100)
+        div_yield = (dps / current_price * 100) if current_price > 0 else 0
 
         return {
-            'current_price': current_price, 'dps': dps,
+            'current_price': current_price, 'dps': dps, 'div_yield': div_yield,
             'next_d_day': next_d_day.strftime('%Y-%m-%d'),
-            'best_strategy': f"배당락 D-{best_w}일 매수",
+            'best_strategy': f"D-{best_w}일 매수",
             'avg_return': best_ret, 'win_rate': best_win,
             'expected_profit': expected_profit, 'action': action
         }
@@ -387,24 +395,24 @@ with tab1:
     st.subheader("📡 오늘의 시장 레이더")
     st.info("코스피 하락 시에도 방어하는 강한 종목을 실시간으로 발굴합니다.")
     
-    col_r1, col_r2, col_r3 = st.columns([2, 2, 1])
-    with col_r1:
-        if st.button("📡 레이더 스캔 실행 (시총 50위)", type="primary", use_container_width=True):
-            with st.spinner("스캔 중..."):
-                df, kc, kchg, _ = run_radar_scan(TOP50_FALLBACK)
-                st.session_state.radar_results, st.session_state.radar_kospi_change = df, kchg
-                st.rerun()
+    if st.button("📡 레이더 스캔 실행 (시총 50위)", type="primary"):
+        with st.spinner("스캔 중..."):
+            df, kc, kchg, _ = run_radar_scan(TOP50_FALLBACK)
+            st.session_state.radar_results, st.session_state.radar_kospi_change = df, kchg
+            st.rerun()
                 
     if st.session_state.radar_results is not None and not st.session_state.radar_results.empty:
         df_radar = st.session_state.radar_results.copy()
-        # run_radar_scan 함수에서 9개 컬럼을 반환하도록 설계됨
-        df_radar.columns = ['종목코드', '기호', '종목명', '시장', '현재가', '등락률(%)', 'vs코스피(%p)', '거래량배율', '판정']
+        
+        # 생성된 데이터프레임의 8개 컬럼에 맞춰 이름 부여
+        df_radar.columns = ['종목코드', '종목명', '시장', '현재가', '등락률(%)', 'vs코스피(%p)', '거래량배율', '판정']
         
         # 포맷팅
         df_radar['현재가'] = df_radar['현재가'].apply(lambda x: f"{x:,.0f}원")
         df_radar['등락률(%)'] = df_radar['등락률(%)'].apply(lambda x: f"{x:+.2f}%")
         df_radar['vs코스피(%p)'] = df_radar['vs코스피(%p)'].apply(lambda x: f"{x:+.2f}%p")
         
+        # 화면에 6개 주요 정보 표시
         st.dataframe(df_radar[['종목명', '시장', '현재가', '등락률(%)', 'vs코스피(%p)', '판정']], use_container_width=True)
 
 # ----- TAB 2: 투자 적합 종목 추천 -----
@@ -482,15 +490,16 @@ with tab4:
         # 포맷팅 적용
         display_div_df['current_price'] = display_div_df['current_price'].apply(lambda x: f"{x:,.0f}원")
         display_div_df['dps'] = display_div_df['dps'].apply(lambda x: f"{x:,.0f}원" if x > 0 else "미정")
+        display_div_df['div_yield'] = display_div_df['div_yield'].apply(lambda x: f"{x:.1f}%" if x > 0 else "-")
         display_div_df['avg_return'] = display_div_df['avg_return'].apply(lambda x: f"{x:+.2f}%")
         display_div_df['win_rate'] = display_div_df['win_rate'].apply(lambda x: f"{x:.0f}%")
         display_div_df['expected_profit'] = display_div_df['expected_profit'].apply(lambda x: f"{x:,.0f}원")
         
         # 보기 좋게 컬럼 재배치
-        display_div_df = display_div_df[['name', 'current_price', 'dps', 'next_d_day', 'best_strategy', 'avg_return', 'win_rate', 'expected_profit', 'action']]
+        display_div_df = display_div_df[['name', 'current_price', 'dps', 'div_yield', 'next_d_day', 'best_strategy', 'avg_return', 'win_rate', 'expected_profit', 'action']]
         display_div_df.columns = [
-            '종목명', '현재가', '연 배당금', '예상 다음 배당일', '최적 매수 타이밍',
-            '10년 평균 차익', '승률', f'예상 차익금({investment_krw//10000}만)', '현재 상태 판정'
+            '종목명', '현재가', '연 배당금', '시가배당률', '예상 다음 배당일', '최적 전략',
+            '평균 차익', '승률', f'예상 차익({investment_krw//10000}만)', '상태 판정'
         ]
         
         # 색상 스타일 적용
@@ -499,13 +508,13 @@ with tab4:
             elif '대기' in str(val): return 'color: #f39c12'
             else: return 'color: #3498db'
 
-        st.dataframe(display_div_df.style.applymap(color_action, subset=['현재 상태 판정']), use_container_width=True, height=450)
+        st.dataframe(display_div_df.style.applymap(color_action, subset=['상태 판정']), use_container_width=True, height=450)
         
         st.info("""
         **💡 리포트 활용 가이드**
         * **예상 다음 배당일**: 과거 배당 지급 패턴을 분석하여 계산한 가장 가까운 배당일입니다.
-        * **최적 매수 타이밍**: 과거 10년 동안 주가가 배당일 기준 며칠 전부터 가장 크게 올랐는지를 보여줍니다. (예: D-30일)
-        * **현재 상태 판정**: 최적 매수 타이밍이 '오늘'과 얼마나 가까운지를 계산하여, 바로 사야 할지 기다려야 할지 알려줍니다.
+        * **최적 전략**: 과거 10년 동안 주가가 배당일 기준 며칠 전부터 가장 크게 올랐는지를 보여줍니다. (예: D-30일 매수)
+        * **상태 판정**: 최적 매수 타이밍이 '오늘'과 얼마나 가까운지를 계산하여, 바로 사야 할지 기다려야 할지 알려줍니다.
         """)
 
 ```
